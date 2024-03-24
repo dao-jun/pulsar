@@ -66,4 +66,16 @@ public interface Entry {
      * of data reached to 0).
      */
     boolean release();
+
+    /**
+     *  Get the publishing timestamp of the entry
+     */
+    interface PublishTimestampGetter {
+        /**
+         * @return the publishing timestamp of the entry
+         */
+        default Long getPublishTimestamp() {
+            return null;
+        }
+    }
 }

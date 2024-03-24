@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
+import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.common.policies.data.TransactionBufferStats;
 import org.apache.pulsar.common.policies.data.TransactionInBufferStats;
@@ -67,13 +68,13 @@ public interface TransactionBuffer {
      * <p>The entry will be indexed by <tt>txnId</tt> and <tt>sequenceId</tt>.
      *
      * @param txnId the transaction id
-     * @param sequenceId the sequence id of the entry in this transaction buffer.
+     * @param ctx the publish context
      * @param buffer the entry buffer
      * @return a future represents the result of the operation.
      * @throws org.apache.pulsar.broker.transaction.buffer.exceptions.TransactionSealedException if the transaction
      *         has been sealed.
      */
-    CompletableFuture<Position> appendBufferToTxn(TxnID txnId, long sequenceId, ByteBuf buffer);
+    CompletableFuture<Position> appendBufferToTxn(TxnID txnId, Topic.PublishContext ctx, ByteBuf buffer);
 
     /**
      * Open a {@link TransactionBufferReader} to read entries of a given transaction
@@ -90,12 +91,12 @@ public interface TransactionBuffer {
     /**
      * Commit the transaction and seal the buffer for this transaction.
      *
-     * <p>If a transaction is sealed, no more entries can be {@link #appendBufferToTxn(TxnID, long, ByteBuf)}.
+     * <p>If a transaction is sealed, no more entries can be {@link #appendBufferToTxn(TxnID, Topic.PublishContext, ByteBuf)}.
      *
      * @param txnID the transaction id
      * @param lowWaterMark the low water mark of this transaction
      * @return a future represents the result of commit operation.
-     * @throws org.apache.pulsar.broker.transaction.buffer.exceptions.TransactionNotFoundException if the transaction
+     * @throws org.apache.pulsar.broker.transaction.buffer.exceptions.buffer.TransactionNotFoundException if the transaction
      *         is not in the buffer.
      */
     CompletableFuture<Void> commitTxn(TxnID txnID, long lowWaterMark);

@@ -34,6 +34,7 @@ import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
 import io.netty.channel.EventLoopGroup;
 import java.lang.reflect.Field;
 import java.util.Map;
@@ -50,6 +51,7 @@ import org.apache.pulsar.broker.service.BacklogQuotaManager;
 import org.apache.pulsar.broker.service.BrokerService;
 import org.apache.pulsar.broker.service.BrokerTestBase;
 import org.apache.pulsar.broker.service.Topic;
+import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
@@ -87,11 +89,11 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         String producerName1 = "producer1";
         ByteBuf byteBuf1 = getMessage(producerName1, 0);
-        Topic.PublishContext publishContext1 = getPublishContext(producerName1, 0);
+        Topic.PublishContext publishContext1 = getPublishContext(producerName1, byteBuf1, 0);
 
         String producerName2 = "producer2";
         ByteBuf byteBuf2 = getMessage(producerName2, 1);
-        Topic.PublishContext publishContext2 = getPublishContext(producerName2, 1);
+        Topic.PublishContext publishContext2 = getPublishContext(producerName2, byteBuf1, 1);
 
         MessageDeduplication.MessageDupStatus status = messageDeduplication.isDuplicate(publishContext1, byteBuf1);
         assertEquals(status, MessageDeduplication.MessageDupStatus.NotDup);
@@ -107,7 +109,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         assertEquals(lastSequenceIdPushed.longValue(), 1);
 
         byteBuf1 = getMessage(producerName1, 1);
-        publishContext1 = getPublishContext(producerName1, 1);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 1);
         status = messageDeduplication.isDuplicate(publishContext1, byteBuf1);
         assertEquals(status, MessageDeduplication.MessageDupStatus.NotDup);
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
@@ -115,7 +117,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         assertEquals(lastSequenceIdPushed.longValue(), 1);
 
         byteBuf1 = getMessage(producerName1, 5);
-        publishContext1 = getPublishContext(producerName1, 5);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 5);
         status = messageDeduplication.isDuplicate(publishContext1, byteBuf1);
         assertEquals(status, MessageDeduplication.MessageDupStatus.NotDup);
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
@@ -123,7 +125,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         assertEquals(lastSequenceIdPushed.longValue(), 5);
 
         byteBuf1 = getMessage(producerName1, 0);
-        publishContext1 = getPublishContext(producerName1, 0);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 0);
         status = messageDeduplication.isDuplicate(publishContext1, byteBuf1);
         // should expect unknown because highestSequencePersisted is empty
         assertEquals(status, MessageDeduplication.MessageDupStatus.Unknown);
@@ -135,7 +137,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         messageDeduplication.highestSequencedPersisted.put(producerName1, 0L);
 
         byteBuf1 = getMessage(producerName1, 0);
-        publishContext1 = getPublishContext(producerName1, 0);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 0);
         status = messageDeduplication.isDuplicate(publishContext1, byteBuf1);
         // now that highestSequencedPersisted, message with seqId of zero can be classified as a dup
         assertEquals(status, MessageDeduplication.MessageDupStatus.Dup);
@@ -272,11 +274,11 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         String producerName1 = "producer1";
         ByteBuf byteBuf1 = getMessage(producerName1, 0);
-        Topic.PublishContext publishContext1 = getPublishContext(producerName1, 0);
+        Topic.PublishContext publishContext1 = getPublishContext(producerName1, byteBuf1, 0);
 
         String producerName2 = "producer2";
         ByteBuf byteBuf2 = getMessage(producerName2, 1);
-        Topic.PublishContext publishContext2 = getPublishContext(producerName2, 1);
+        Topic.PublishContext publishContext2 = getPublishContext(producerName2, byteBuf2, 1);
 
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         persistentTopic.addComplete(new PositionImpl(0, 1), null, publishContext1);
@@ -299,7 +301,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         assertEquals(lastSequenceIdPushed.longValue(), 1);
 
         byteBuf1 = getMessage(producerName1, 1);
-        publishContext1 = getPublishContext(producerName1, 1);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 1);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         persistentTopic.addComplete(new PositionImpl(0, 3), null, publishContext1);
         verify(managedLedger, times(3)).asyncAddEntry(any(ByteBuf.class), any(), any());
@@ -311,7 +313,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
         assertEquals(lastSequenceIdPushed.longValue(), 1);
 
         byteBuf1 = getMessage(producerName1, 5);
-        publishContext1 = getPublishContext(producerName1, 5);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 5);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         persistentTopic.addComplete(new PositionImpl(0, 4), null, publishContext1);
         verify(managedLedger, times(4)).asyncAddEntry(any(ByteBuf.class), any(), any());
@@ -324,7 +326,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         // publish dup
         byteBuf1 = getMessage(producerName1, 0);
-        publishContext1 = getPublishContext(producerName1, 0);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 0);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         verify(managedLedger, times(4)).asyncAddEntry(any(ByteBuf.class), any(), any());
         lastSequenceIdPushed = messageDeduplication.highestSequencedPushed.get(producerName1);
@@ -334,7 +336,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         // publish message unknown dup status
         byteBuf1 = getMessage(producerName1, 6);
-        publishContext1 = getPublishContext(producerName1, 6);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 6);
         // don't complete message
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         verify(managedLedger, times(5)).asyncAddEntry(any(ByteBuf.class), any(), any());
@@ -347,7 +349,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         // publish same message again
         byteBuf1 = getMessage(producerName1, 6);
-        publishContext1 = getPublishContext(producerName1, 6);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 6);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         verify(managedLedger, times(5)).asyncAddEntry(any(ByteBuf.class), any(), any());
         verify(publishContext1, times(1)).completed(any(MessageDeduplication.MessageDupUnknownException.class), eq(-1L), eq(-1L));
@@ -357,7 +359,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         // simulate failure
         byteBuf1 = getMessage(producerName1, 7);
-        publishContext1 = getPublishContext(producerName1, 7);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 7);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         verify(managedLedger, times(6)).asyncAddEntry(any(ByteBuf.class), any(), any());
 
@@ -377,7 +379,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         // try dup
         byteBuf1 = getMessage(producerName1, 6);
-        publishContext1 = getPublishContext(producerName1, 6);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 6);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         verify(managedLedger, times(6)).asyncAddEntry(any(ByteBuf.class), any(), any());
         verify(publishContext1, times(1)).completed(eq(null), eq(-1L), eq(-1L));
@@ -387,7 +389,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
 
         // try new message
         byteBuf1 = getMessage(producerName1, 8);
-        publishContext1 = getPublishContext(producerName1, 8);
+        publishContext1 = getPublishContext(producerName1, byteBuf1, 8);
         persistentTopic.publishMessage(byteBuf1, publishContext1);
         verify(managedLedger, times(7)).asyncAddEntry(any(ByteBuf.class), any(), any());
         persistentTopic.addComplete(new PositionImpl(0, 5), null, publishContext1);
@@ -410,7 +412,7 @@ public class MessageDuplicationTest extends BrokerTestBase {
                 Commands.ChecksumType.Crc32c, messageMetadata, io.netty.buffer.Unpooled.copiedBuffer(new byte[0]));
     }
 
-    public Topic.PublishContext getPublishContext(String producerName, long seqId) {
+    public Topic.PublishContext getPublishContext(String producerName, ByteBuf buf, long seqId) {
         return spy(new Topic.PublishContext() {
             @Override
             public String getProducerName() {
@@ -424,6 +426,15 @@ public class MessageDuplicationTest extends BrokerTestBase {
             @Override
             public void completed(Exception e, long ledgerId, long entryId) {
 
+            }
+
+            @Override
+            public MessageMetadata getMetadata() {
+                MessageMetadata metadata = new MessageMetadata();
+                int readIndex = buf.readerIndex();
+                Commands.parseMessageMetadata(buf, metadata);
+                buf.readerIndex(readIndex);
+                return metadata;
             }
         });
     }

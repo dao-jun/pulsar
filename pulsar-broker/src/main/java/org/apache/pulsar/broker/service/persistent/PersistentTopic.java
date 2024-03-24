@@ -561,7 +561,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             decrementPendingWriteOpsAndCheck();
             return;
         }
-        if (isExceedMaximumDeliveryDelay(headersAndPayload)) {
+        if (isExceedMaximumDeliveryDelay(publishContext.getMetadata())) {
             publishContext.completed(
                     new NotAllowedException(
                             String.format("Exceeds max allowed delivery delay of %s milliseconds",
@@ -3889,7 +3889,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             decrementPendingWriteOpsAndCheck();
             return;
         }
-        if (isExceedMaximumDeliveryDelay(headersAndPayload)) {
+        if (isExceedMaximumDeliveryDelay(publishContext.getMetadata())) {
             publishContext.completed(
                     new NotAllowedException(
                             String.format("Exceeds max allowed delivery delay of %s milliseconds",
@@ -3902,14 +3902,13 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 messageDeduplication.isDuplicate(publishContext, headersAndPayload);
         switch (status) {
             case NotDup:
-                transactionBuffer.appendBufferToTxn(txnID, publishContext.getSequenceId(), headersAndPayload)
+                transactionBuffer.appendBufferToTxn(txnID, publishContext, headersAndPayload)
                         .thenAccept(position -> {
                             // Message has been successfully persisted
                             messageDeduplication.recordMessagePersisted(publishContext,
                                     (PositionImpl) position);
                             publishContext.setProperty("txn_id", txnID.toString());
-                            publishContext.completed(null, ((PositionImpl) position).getLedgerId(),
-                                    ((PositionImpl) position).getEntryId());
+                            publishContext.completed(null, position.getLedgerId(), position.getEntryId());
 
                             decrementPendingWriteOpsAndCheck();
                         })
@@ -4119,15 +4118,12 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         return Optional.ofNullable(shadowSourceTopic);
     }
 
-    protected boolean isExceedMaximumDeliveryDelay(ByteBuf headersAndPayload) {
+    protected boolean isExceedMaximumDeliveryDelay(MessageMetadata metadata) {
         if (isDelayedDeliveryEnabled()) {
             long maxDeliveryDelayInMs = getDelayedDeliveryMaxDelayInMillis();
             if (maxDeliveryDelayInMs > 0) {
-                headersAndPayload.markReaderIndex();
-                MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
-                headersAndPayload.resetReaderIndex();
-                return msgMetadata.hasDeliverAtTime()
-                        && msgMetadata.getDeliverAtTime() - msgMetadata.getPublishTime() > maxDeliveryDelayInMs;
+                return metadata.hasDeliverAtTime()
+                        && metadata.getDeliverAtTime() - metadata.getPublishTime() > maxDeliveryDelayInMs;
             }
         }
         return false;

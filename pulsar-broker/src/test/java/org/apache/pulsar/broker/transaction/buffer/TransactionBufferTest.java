@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.transaction.buffer;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
@@ -31,11 +32,13 @@ import io.netty.buffer.Unpooled;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
+import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.broker.transaction.exception.buffer.TransactionBufferException;
 import org.apache.pulsar.broker.transaction.buffer.impl.InMemTransactionBufferProvider;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.transaction.coordinator.proto.TxnStatus;
+import org.mockito.Mockito;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
@@ -242,9 +245,11 @@ public class TransactionBufferTest {
     private void appendEntries(TxnID txnId, int numEntries, long startSequenceId) {
         for (int i = 0; i < numEntries; i++) {
             long sequenceId = startSequenceId + i;
+            Topic.PublishContext ctx = Mockito.mock(Topic.PublishContext.class);
+            doReturn(sequenceId).when(ctx).getSequenceId();
             buffer.appendBufferToTxn(
                 txnId,
-                sequenceId,
+                ctx,
                 Unpooled.copiedBuffer("message-" + sequenceId, UTF_8)
             ).join();
         }

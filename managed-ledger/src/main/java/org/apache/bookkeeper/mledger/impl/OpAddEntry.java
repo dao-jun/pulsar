@@ -32,6 +32,7 @@ import org.apache.bookkeeper.client.AsyncCallback.CloseCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.AddEntryCallback;
+import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
@@ -228,6 +229,11 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable {
         ManagedLedgerImpl.TOTAL_SIZE_UPDATER.addAndGet(ml, dataLength);
 
         long ledgerId = ledger != null ? ledger.getId() : ((Position) ctx).getLedgerId();
+        // Update the ledger's publish timestamp.
+        Long timestamp;
+        if (ctx instanceof Entry.PublishTimestampGetter getter && (timestamp = getter.getPublishTimestamp()) != null) {
+            ml.updatePublishTimestamp(ledgerId, timestamp);
+        }
         if (ml.hasActiveCursors()) {
             // Avoid caching entries if no cursor has been created
             EntryImpl entry = EntryImpl.create(ledgerId, entryId, data);
