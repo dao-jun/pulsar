@@ -280,8 +280,10 @@ public class TopicsBase extends PersistentTopicsBase {
                         .remove(topicName.getPartitionIndex());
             } else {
                 try {
-                    t.get().publishMessage(messageToByteBuf(message),
-                            RestMessagePublishContext.get(publishResult, t.get(), System.nanoTime()));
+                    MessageImpl msg = (MessageImpl) message;
+                    MessageMetadata metadata = msg.getMessageBuilder();
+                    t.get().publishMessage(messageToByteBuf(msg),
+                            RestMessagePublishContext.get(publishResult, t.get(), System.nanoTime(), metadata));
                 } catch (Exception e) {
                     if (log.isDebugEnabled()) {
                         log.debug("Fail to publish single messages to topic  {}: {} ",

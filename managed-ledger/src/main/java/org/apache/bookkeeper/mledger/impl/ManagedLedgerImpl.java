@@ -64,11 +64,13 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import javax.annotation.Nullable;
 import lombok.Getter;
+import lombok.Setter;
 import org.apache.bookkeeper.client.AsyncCallback;
 import org.apache.bookkeeper.client.AsyncCallback.CreateCallback;
 import org.apache.bookkeeper.client.AsyncCallback.OpenCallback;
@@ -165,6 +167,9 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                     .build();
     protected final NavigableMap<Long, LedgerInfo> ledgers = new ConcurrentSkipListMap<>();
     protected volatile Stat ledgersStat;
+
+    @Setter
+    private volatile Function<Long, Map<String, String>> ledgerInfoPropertiesGetter = null;
 
     // contains all cursors, where durable cursors are ordered by mark delete position
     private final ManagedCursorContainer cursors = new ManagedCursorContainer();
@@ -1750,9 +1755,24 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             log.debug("[{}] Ledger has been closed id={} entries={}", name, lh.getId(), entriesInLedger);
         }
         if (entriesInLedger > 0) {
-            LedgerInfo info = LedgerInfo.newBuilder().setLedgerId(lh.getId()).setEntries(entriesInLedger)
-                    .setSize(lh.getLength()).setTimestamp(clock.millis()).build();
-            ledgers.put(lh.getId(), info);
+            // Update the properties of the ledger.
+            Map<String, String> properties = Collections.emptyMap();
+            if (ledgerInfoPropertiesGetter != null) {
+                try {
+                    properties = ledgerInfoPropertiesGetter.apply(lh.getId());
+                } catch (Exception e) {
+                    log.error("[{}] Failed to get ledger info properties for ledger {} with entries {}",
+                            name, lh.getId(), entriesInLedger, e);
+                }
+
+            }
+            LedgerInfo.Builder builder = LedgerInfo.newBuilder().setLedgerId(lh.getId()).setEntries(entriesInLedger)
+                    .setSize(lh.getLength()).setTimestamp(clock.millis());
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                builder.addProperties(
+                        MLDataFormats.KeyValue.newBuilder().setKey(entry.getKey()).setValue(entry.getValue()));
+            }
+            ledgers.put(lh.getId(), builder.build());
         } else {
             // The last ledger was empty, so we can discard it
             ledgers.remove(lh.getId());

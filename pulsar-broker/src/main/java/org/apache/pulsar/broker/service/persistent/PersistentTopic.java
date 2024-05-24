@@ -36,6 +36,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
+import java.util.NavigableMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
@@ -44,6 +45,7 @@ import java.util.TreeSet;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -90,6 +92,7 @@ import org.apache.bookkeeper.net.BookieId;
 import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.mutable.MutableInt;
+import org.apache.commons.lang3.tuple.MutablePair;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.delayed.BucketDelayedDeliveryTrackerFactory;
 import org.apache.pulsar.broker.delayed.DelayedDeliveryTrackerFactory;
@@ -202,6 +205,8 @@ import org.slf4j.LoggerFactory;
 
 
 public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCallback {
+    public static final String LEDGER_MIN_PUBLISH_TIMESTAMP = "LEDGER_MIN_PUBLISH_TIMESTAMP";
+    public static final String LEDGER_MAX_PUBLISH_TIMESTAMP = "LEDGER_MAX_PUBLISH_TIMESTAMP";
 
     // Managed ledger associated with the topic
     protected final ManagedLedger ledger;
@@ -295,6 +300,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             PersistentTopic.class,
             TimeBasedBacklogQuotaCheckResult.class,
             "timeBasedBacklogQuotaCheckResult");
+    private final NavigableMap<Long, MutablePair<Long, Long>> ledgerPublishTimeMap = new ConcurrentSkipListMap<>();
     @Value
     private static class TimeBasedBacklogQuotaCheckResult {
         PositionImpl oldestCursorMarkDeletePosition;
@@ -385,6 +391,16 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 ? brokerService.getTopicOrderedExecutor().chooseThread(topic)
                 : null;
         this.ledger = ledger;
+        ledger.setLedgerInfoPropertiesGetter(ledgerId -> {
+            MutablePair<Long, Long> pair = ledgerPublishTimeMap.remove(ledgerId);
+            if (pair != null) {
+                String minPublishTimestamp = String.valueOf(pair.getLeft());
+                String maxPublishTimestamp = String.valueOf(pair.getRight());
+                return Map.of(LEDGER_MIN_PUBLISH_TIMESTAMP, minPublishTimestamp,
+                        LEDGER_MAX_PUBLISH_TIMESTAMP, maxPublishTimestamp);
+            }
+            return Collections.emptyMap();
+        });
         this.subscriptions = ConcurrentOpenHashMap.<String, PersistentSubscription>newBuilder()
                         .expectedItems(16)
                         .concurrencyLevel(1)
@@ -619,7 +635,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             decrementPendingWriteOpsAndCheck();
             return;
         }
-        if (isExceedMaximumDeliveryDelay(headersAndPayload)) {
+        if (isExceedMaximumDeliveryDelay(headersAndPayload, publishContext)) {
             publishContext.completed(
                     new NotAllowedException(
                             String.format("Exceeds max allowed delivery delay of %s milliseconds",
@@ -731,6 +747,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
     public void addComplete(Position pos, ByteBuf entryData, Object ctx) {
         PublishContext publishContext = (PublishContext) ctx;
         PositionImpl position = (PositionImpl) pos;
+        recordMessagePublishTimestamp(position, publishContext);
 
         // Message has been successfully persisted
         messageDeduplication.recordMessagePersisted(publishContext, position);
@@ -4095,7 +4112,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
             decrementPendingWriteOpsAndCheck();
             return;
         }
-        if (isExceedMaximumDeliveryDelay(headersAndPayload)) {
+        if (isExceedMaximumDeliveryDelay(headersAndPayload, publishContext)) {
             publishContext.completed(
                     new NotAllowedException(
                             String.format("Exceeds max allowed delivery delay of %s milliseconds",
@@ -4108,15 +4125,13 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 messageDeduplication.isDuplicate(publishContext, headersAndPayload);
         switch (status) {
             case NotDup:
-                transactionBuffer.appendBufferToTxn(txnID, publishContext.getSequenceId(), headersAndPayload)
+                transactionBuffer.appendBufferToTxn(txnID, publishContext, headersAndPayload)
                         .thenAccept(position -> {
                             // Message has been successfully persisted
-                            messageDeduplication.recordMessagePersisted(publishContext,
-                                    (PositionImpl) position);
+                            recordMessagePublishTimestamp(position, publishContext);
+                            messageDeduplication.recordMessagePersisted(publishContext, (PositionImpl) position);
                             publishContext.setProperty("txn_id", txnID.toString());
-                            publishContext.completed(null, ((PositionImpl) position).getLedgerId(),
-                                    ((PositionImpl) position).getEntryId());
-
+                            publishContext.completed(null, position.getLedgerId(), position.getEntryId());
                             decrementPendingWriteOpsAndCheck();
                         })
                         .exceptionally(throwable -> {
@@ -4329,13 +4344,16 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         return Optional.ofNullable(shadowSourceTopic);
     }
 
-    protected boolean isExceedMaximumDeliveryDelay(ByteBuf headersAndPayload) {
+    protected boolean isExceedMaximumDeliveryDelay(ByteBuf headersAndPayload, PublishContext context) {
         if (isDelayedDeliveryEnabled()) {
             long maxDeliveryDelayInMs = getDelayedDeliveryMaxDelayInMillis();
             if (maxDeliveryDelayInMs > 0) {
-                headersAndPayload.markReaderIndex();
-                MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
-                headersAndPayload.resetReaderIndex();
+                MessageMetadata msgMetadata = context.getMessageMetadata();
+                if (msgMetadata == null) {
+                    headersAndPayload.markReaderIndex();
+                    msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
+                    headersAndPayload.resetReaderIndex();
+                }
                 return msgMetadata.hasDeliverAtTime()
                         && msgMetadata.getDeliverAtTime() - msgMetadata.getPublishTime() > maxDeliveryDelayInMs;
             }
@@ -4343,4 +4361,29 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         return false;
     }
 
+
+    /**
+     * Record the publishing time of the message to the ledgerPublishTimeMap.
+     *
+     * @param position
+     * @param context
+     */
+    public void recordMessagePublishTimestamp(Position position, PublishContext context) {
+        long ledgerId = position.getLedgerId();
+        MessageMetadata metadata = context.getMessageMetadata();
+        if (null == metadata || !metadata.hasPublishTime()) {
+            return;
+        }
+        long publishTime = metadata.getPublishTime();
+        MutablePair<Long, Long> pair =
+                ledgerPublishTimeMap.computeIfAbsent(ledgerId, k -> MutablePair.of(Long.MAX_VALUE, Long.MIN_VALUE));
+        long start = pair.getLeft();
+        long end = pair.getRight();
+        if (publishTime < start) {
+            pair.setLeft(publishTime);
+        }
+        if (publishTime > end) {
+            pair.setRight(publishTime);
+        }
+    }
 }

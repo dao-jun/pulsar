@@ -24,6 +24,7 @@ import java.util.concurrent.TimeUnit;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
 import org.apache.pulsar.broker.service.Topic;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 
 /**
  * PublishContext implementation for REST message publishing.
@@ -33,6 +34,7 @@ public class RestMessagePublishContext implements Topic.PublishContext {
 
     private Topic topic;
     private long startTimeNs;
+    private MessageMetadata messageMetadata;
     private CompletableFuture<PositionImpl> positionFuture;
 
     /**
@@ -59,13 +61,19 @@ public class RestMessagePublishContext implements Topic.PublishContext {
         recycle();
     }
 
+    @Override
+    public MessageMetadata getMessageMetadata() {
+        return messageMetadata;
+    }
+
     // recycler
     public static RestMessagePublishContext get(CompletableFuture<PositionImpl> positionFuture, Topic topic,
-                                                     long startTimeNs) {
+                                                     long startTimeNs, MessageMetadata messageMetadata) {
         RestMessagePublishContext callback = RECYCLER.get();
         callback.positionFuture = positionFuture;
         callback.topic = topic;
         callback.startTimeNs = startTimeNs;
+        callback.messageMetadata = messageMetadata;
         return callback;
     }
 
@@ -84,6 +92,7 @@ public class RestMessagePublishContext implements Topic.PublishContext {
     public void recycle() {
         topic = null;
         startTimeNs = -1;
+        messageMetadata = null;
         recyclerHandle.recycle(this);
     }
 }

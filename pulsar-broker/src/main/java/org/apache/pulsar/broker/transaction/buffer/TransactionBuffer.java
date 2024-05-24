@@ -24,6 +24,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
+import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.broker.transaction.exception.TransactionException;
 import org.apache.pulsar.broker.transaction.exception.buffer.TransactionBufferException;
 import org.apache.pulsar.client.api.transaction.TxnID;
@@ -68,12 +69,12 @@ public interface TransactionBuffer {
      * <p>The entry will be indexed by <tt>txnId</tt> and <tt>sequenceId</tt>.
      *
      * @param txnId the transaction id
-     * @param sequenceId the sequence id of the entry in this transaction buffer.
+     * @param context the publish context
      * @param buffer the entry buffer
      * @return a future represents the result of the operation.
      * @throws TransactionException.TransactionSealedException if the transaction has been sealed.
      */
-    CompletableFuture<Position> appendBufferToTxn(TxnID txnId, long sequenceId, ByteBuf buffer);
+    CompletableFuture<Position> appendBufferToTxn(TxnID txnId, Topic.PublishContext context, ByteBuf buffer);
 
     /**
      * Open a {@link TransactionBufferReader} to read entries of a given transaction
@@ -89,7 +90,8 @@ public interface TransactionBuffer {
     /**
      * Commit the transaction and seal the buffer for this transaction.
      *
-     * <p>If a transaction is sealed, no more entries can be {@link #appendBufferToTxn(TxnID, long, ByteBuf)}.
+     * <p>If a transaction is sealed, no more entries can be
+     * {@link #appendBufferToTxn(TxnID, org.apache.pulsar.broker.service.Topic.PublishContext, ByteBuf)}.
      *
      * @param txnID the transaction id
      * @param lowWaterMark the low water mark of this transaction

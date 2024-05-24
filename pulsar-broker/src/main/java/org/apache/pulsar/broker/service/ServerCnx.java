@@ -1795,9 +1795,15 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             return;
         }
 
+        // Parse Message Metadata.
+        MessageMetadata metadata = new MessageMetadata();
+        headersAndPayload.markReaderIndex();
+        Commands.parseMessageMetadata(headersAndPayload, metadata);
+        headersAndPayload.resetReaderIndex();
+
         Producer producer = producerFuture.getNow(null);
         if (log.isDebugEnabled()) {
-            printSendCommandDebug(send, headersAndPayload);
+            printSendCommandDebug(send, metadata, headersAndPayload);
         }
 
         // New messages are silently ignored during topic transfer. Note that the transferring flag is only set when the
@@ -1838,7 +1844,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             TxnID txnID = new TxnID(send.getTxnidMostBits(), send.getTxnidLeastBits());
             producer.publishTxnMessage(txnID, producer.getProducerId(), send.getSequenceId(),
                     send.getHighestSequenceId(), headersAndPayload, send.getNumMessages(), send.isIsChunk(),
-                    send.isMarker());
+                    send.isMarker(), metadata);
             return;
         }
 
@@ -1849,17 +1855,14 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         // Persist the message
         if (send.hasHighestSequenceId() && send.getSequenceId() <= send.getHighestSequenceId()) {
             producer.publishMessage(send.getProducerId(), send.getSequenceId(), send.getHighestSequenceId(),
-                    headersAndPayload, send.getNumMessages(), send.isIsChunk(), send.isMarker(), position);
+                    headersAndPayload, send.getNumMessages(), send.isIsChunk(), send.isMarker(), position, metadata);
         } else {
             producer.publishMessage(send.getProducerId(), send.getSequenceId(), headersAndPayload,
-                    send.getNumMessages(), send.isIsChunk(), send.isMarker(), position);
+                    send.getNumMessages(), send.isIsChunk(), send.isMarker(), position, metadata);
         }
     }
 
-    private void printSendCommandDebug(CommandSend send, ByteBuf headersAndPayload) {
-        headersAndPayload.markReaderIndex();
-        MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
-        headersAndPayload.resetReaderIndex();
+    private void printSendCommandDebug(CommandSend send, MessageMetadata msgMetadata, ByteBuf headersAndPayload) {
         if (log.isDebugEnabled()) {
             log.debug("[{}] Received send message request. producer: {}:{} {}:{} size: {},"
                             + " partition key is: {}, ordering key is {}, uncompressedSize is {}",

@@ -22,6 +22,7 @@ import io.netty.buffer.ByteBuf;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import org.apache.bookkeeper.common.annotation.InterfaceAudience;
 import org.apache.bookkeeper.common.annotation.InterfaceStability;
@@ -669,6 +670,13 @@ public interface ManagedLedger {
      * will get {@link Optional#empty()} if corresponding ledger not exists.
      */
     Optional<LedgerInfo> getOptionalLedgerInfo(long ledgerId);
+
+
+    /**
+     * Set ledgerInfoPropertiesGetter.
+     * @param ledgerInfoPropertiesGetter
+     */
+    void setLedgerInfoPropertiesGetter(Function<Long, Map<String, String>> ledgerInfoPropertiesGetter);
 
     /**
      * Truncate ledgers
