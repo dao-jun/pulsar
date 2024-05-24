@@ -4368,7 +4368,7 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
      * @param position
      * @param context
      */
-    public void recordMessagePublishTimestamp(Position position, PublishContext context) {
+    private void recordMessagePublishTimestamp(Position position, PublishContext context) {
         long ledgerId = position.getLedgerId();
         MessageMetadata metadata = context.getMessageMetadata();
         if (null == metadata || !metadata.hasPublishTime()) {
