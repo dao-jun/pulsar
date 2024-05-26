@@ -4371,4 +4371,34 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
             assertEquals(ml.currentLedgerEntries, 0);
         });
     }
+
+    @Test
+    public void testManagedLedger_LedgerInfoProperties() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setMaxEntriesPerLedger(5);
+        ManagedLedgerImpl ml = (ManagedLedgerImpl) factory.open("testManagedLedgerLedgerInfoProperties", config);
+        for (int i = 0; i < 10; i++) {
+            ml.addEntry(new byte[4]);
+        }
+
+        Set<Long> ledgerIds = ml.getLedgersInfo().keySet();
+        for (Long ledgerId : ledgerIds) {
+            Map<String, String> properties = ml.getLedgerInfoProperties(ledgerId);
+            Assert.assertEquals(properties.size(), 0);
+
+            ml.addLedgerInfoProperties(ledgerId, Map.of("key", "value"));
+            properties = ml.getLedgerInfoProperties(ledgerId);
+            Assert.assertEquals(properties.size(), 1);
+            Assert.assertEquals(properties.get("key"), "value");
+
+            ml.addLedgerInfoProperties(ledgerId, Map.of("key", "value0"));
+            properties = ml.getLedgerInfoProperties(ledgerId);
+            Assert.assertEquals(properties.size(), 1);
+            Assert.assertEquals(properties.get("key"), "value0");
+
+            ml.removeLedgerInfoProperties(ledgerId, List.of("key"));
+            properties = ml.getLedgerInfoProperties(ledgerId);
+            Assert.assertEquals(properties.size(), 0);
+        }
+    }
 }

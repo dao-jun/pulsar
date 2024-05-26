@@ -64,7 +64,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLongFieldUpdater;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
-import java.util.function.Function;
+import java.util.function.Consumer;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -168,9 +168,6 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     protected final NavigableMap<Long, LedgerInfo> ledgers = new ConcurrentSkipListMap<>();
     protected volatile Stat ledgersStat;
 
-    @Setter
-    private volatile Function<Long, Map<String, String>> ledgerInfoPropertiesGetter = null;
-
     // contains all cursors, where durable cursors are ordered by mark delete position
     private final ManagedCursorContainer cursors = new ManagedCursorContainer();
     // contains active cursors eligible for caching,
@@ -216,6 +213,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
      */
     private final CallbackMutex metadataMutex = new CallbackMutex();
     private final CallbackMutex trimmerMutex = new CallbackMutex();
+    // This lock is held while Update LedgerInfo is in progress.
+    private final Object ledgerInfoUpdateMutex = new Object();
+
+    @Setter
+    private volatile Consumer<Long> ledgerClosedListener = null;
 
     private final CallbackMutex offloadMutex = new CallbackMutex();
     public static final CompletableFuture<PositionImpl> NULL_OFFLOAD_PROMISE = CompletableFuture
@@ -1755,24 +1757,16 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             log.debug("[{}] Ledger has been closed id={} entries={}", name, lh.getId(), entriesInLedger);
         }
         if (entriesInLedger > 0) {
-            // Update the properties of the ledger.
-            Map<String, String> properties = Collections.emptyMap();
-            if (ledgerInfoPropertiesGetter != null) {
-                try {
-                    properties = ledgerInfoPropertiesGetter.apply(lh.getId());
-                } catch (Exception e) {
-                    log.error("[{}] Failed to get ledger info properties for ledger {} with entries {}",
-                            name, lh.getId(), entriesInLedger, e);
-                }
-
+            // Trigger the listener when the ledger is closed.
+            if (null != ledgerClosedListener) {
+                ledgerClosedListener.accept(lh.getId());
             }
-            LedgerInfo.Builder builder = LedgerInfo.newBuilder().setLedgerId(lh.getId()).setEntries(entriesInLedger)
-                    .setSize(lh.getLength()).setTimestamp(clock.millis());
-            for (Map.Entry<String, String> entry : properties.entrySet()) {
-                builder.addProperties(
-                        MLDataFormats.KeyValue.newBuilder().setKey(entry.getKey()).setValue(entry.getValue()));
+            synchronized (ledgerInfoUpdateMutex) {
+                LedgerInfo info = ledgers.get(lh.getId());
+                LedgerInfo.Builder builder = LedgerInfo.newBuilder(info).setLedgerId(lh.getId())
+                        .setEntries(entriesInLedger).setSize(lh.getLength()).setTimestamp(clock.millis());
+                ledgers.put(lh.getId(), builder.build());
             }
-            ledgers.put(lh.getId(), builder.build());
         } else {
             // The last ledger was empty, so we can discard it
             ledgers.remove(lh.getId());
@@ -1950,6 +1944,69 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     @Override
     public Optional<LedgerInfo> getOptionalLedgerInfo(long ledgerId) {
         return Optional.ofNullable(ledgers.get(ledgerId));
+    }
+
+    @Override
+    public Map<String, String> getLedgerInfoProperties(long ledgerId) {
+        final LedgerInfo ledgerInfo = ledgers.get(ledgerId);
+        return getLedgerInfoPropertiesAsMap(ledgerInfo);
+    }
+
+    private Map<String, String> getLedgerInfoPropertiesAsMap(LedgerInfo ledgerInfo) {
+        if (ledgerInfo == null || ledgerInfo.getPropertiesCount() <= 0) {
+            return Collections.emptyMap();
+        }
+        int count = ledgerInfo.getPropertiesCount();
+        Map<String, String> properties = new HashMap<>(count);
+        for (int i = 0; i < count; i++) {
+            MLDataFormats.KeyValue kv = ledgerInfo.getProperties(i);
+            properties.put(kv.getKey(), kv.getValue());
+        }
+        return properties;
+    }
+
+    @Override
+    public void addLedgerInfoProperties(long ledgerId, Map<String, String> properties) {
+        if (null == properties || properties.isEmpty()) {
+            return;
+        }
+        getLedgerInfo(ledgerId).thenAccept(ledgerInfo -> {
+            if (ledgerInfo == null) {
+                return;
+            }
+            synchronized (ledgerInfoUpdateMutex) {
+                Map<String, String> newProperties = new HashMap<>(getLedgerInfoPropertiesAsMap(ledgerInfo));
+                newProperties.putAll(properties);
+                LedgerInfo.Builder builder = LedgerInfo.newBuilder(ledgerInfo).clearProperties();
+                for (Map.Entry<String, String> entry : newProperties.entrySet()) {
+                    builder.addProperties(
+                            MLDataFormats.KeyValue.newBuilder().setKey(entry.getKey()).setValue(entry.getValue()));
+                }
+                ledgers.put(ledgerId, builder.build());
+            }
+        });
+    }
+
+    @Override
+    public void removeLedgerInfoProperties(long ledgerId, List<String> keys) {
+        if (null == keys || keys.isEmpty()) {
+            return;
+        }
+        getLedgerInfo(ledgerId).thenAccept(ledgerInfo -> {
+            if (ledgerInfo == null) {
+                return;
+            }
+            synchronized (ledgerInfoUpdateMutex) {
+                Map<String, String> properties = getLedgerInfoPropertiesAsMap(ledgerInfo);
+                keys.forEach(properties::remove);
+                LedgerInfo.Builder builder = LedgerInfo.newBuilder(ledgerInfo).clearProperties();
+                for (Map.Entry<String, String> entry : properties.entrySet()) {
+                    builder.addProperties(
+                            MLDataFormats.KeyValue.newBuilder().setKey(entry.getKey()).setValue(entry.getValue()));
+                }
+                ledgers.put(ledgerId, builder.build());
+            }
+        });
     }
 
     CompletableFuture<ReadHandle> getLedgerHandle(long ledgerId) {

@@ -19,6 +19,8 @@
 package org.apache.bookkeeper.mledger.offload.jcloud.impl;
 
 import io.netty.buffer.ByteBuf;
+
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -359,6 +361,21 @@ public class MockManagedLedger implements ManagedLedger {
     public Optional<LedgerInfo> getOptionalLedgerInfo(long ledgerId) {
         final LedgerInfo build = LedgerInfo.newBuilder().setLedgerId(ledgerId).setSize(100).setEntries(20).build();
         return Optional.of(build);
+    }
+
+    @Override
+    public Map<String, String> getLedgerInfoProperties(long ledgerId) {
+        return Map.of();
+    }
+
+    @Override
+    public void addLedgerInfoProperties(long ledgerId, Map<String, String> properties) {
+
+    }
+
+    @Override
+    public void removeLedgerInfoProperties(long ledgerId, List<String> keys) {
+
     }
 
     @Override

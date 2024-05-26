@@ -19,10 +19,11 @@
 package org.apache.bookkeeper.mledger;
 
 import io.netty.buffer.ByteBuf;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import org.apache.bookkeeper.common.annotation.InterfaceAudience;
 import org.apache.bookkeeper.common.annotation.InterfaceStability;
@@ -673,10 +674,30 @@ public interface ManagedLedger {
 
 
     /**
-     * Set ledgerInfoPropertiesGetter.
-     * @param ledgerInfoPropertiesGetter
+     * Get ledger info properties.
+     * @param ledgerId
      */
-    void setLedgerInfoPropertiesGetter(Function<Long, Map<String, String>> ledgerInfoPropertiesGetter);
+    default Map<String, String> getLedgerInfoProperties(long ledgerId) {
+        return Collections.emptyMap();
+    }
+
+    /**
+     * Add ledger info properties.
+     * @param ledgerId
+     * @param properties
+     */
+    default void addLedgerInfoProperties(long ledgerId, Map<String, String> properties) {
+        // no-op
+    }
+
+    /**
+     * Remove ledger info properties.
+     * @param ledgerId
+     * @param keys
+     */
+    default void removeLedgerInfoProperties(long ledgerId, List<String> keys) {
+        // no-op
+    }
 
     /**
      * Truncate ledgers

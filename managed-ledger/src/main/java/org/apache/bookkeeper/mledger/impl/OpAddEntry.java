@@ -283,17 +283,19 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable {
             log.warn("Error when closing ledger {}. Status={}", lh.getId(), BKException.getMessage(rc));
         }
 
-        ml.ledgerClosed(lh);
         updateLatency();
 
         AddEntryCallback cb = callbackUpdater.getAndSet(this, null);
         if (cb != null) {
             cb.addComplete(PositionImpl.get(lh.getId(), entryId), data.asReadOnly(), ctx);
+            // Call ledgerClosed after notifying the callback.
+            ml.ledgerClosed(lh);
             ml.notifyCursors();
             ml.notifyWaitingEntryCallBacks();
             ReferenceCountUtil.release(data);
             this.recycle();
         } else {
+            ml.ledgerClosed(lh);
             ReferenceCountUtil.release(data);
         }
     }

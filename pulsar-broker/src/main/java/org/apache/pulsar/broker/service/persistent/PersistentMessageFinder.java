@@ -19,7 +19,7 @@
 package org.apache.pulsar.broker.service.persistent;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
@@ -29,7 +29,6 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
 import org.apache.bookkeeper.mledger.impl.PositionImpl;
 import org.apache.bookkeeper.mledger.proto.MLDataFormats;
-import org.apache.commons.collections4.CollectionUtils;
 import org.apache.commons.lang3.math.NumberUtils;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.pulsar.client.impl.MessageImpl;
@@ -96,11 +95,14 @@ public class PersistentMessageFinder implements AsyncCallbacks.FindEntryCallback
 
         for (MLDataFormats.ManagedLedgerInfo.LedgerInfo info : ledger.getLedgersInfo().values()) {
             Pair<Long, Long> minMaxPublishTimestamp = getMinMaxPublishTimestamp(info);
-            if (minMaxPublishTimestamp.getLeft() == null || minMaxPublishTimestamp.getRight() == null) {
-                return Pair.of(null, null);
+            Long minPublishTimestamp = minMaxPublishTimestamp.getLeft();
+            Long maxPublishTimestamp = minMaxPublishTimestamp.getRight();
+            if (minPublishTimestamp == null || maxPublishTimestamp == null) {
+                continue;
             }
+
             // If the timestamp is exactly the same as the first message in the ledger
-            if (minMaxPublishTimestamp.getLeft() == timestamp) {
+            if (minPublishTimestamp == timestamp) {
                 PositionImpl previous = ledger.getPreviousPosition(PositionImpl.get(info.getLedgerId(), 0));
                 if (previous.getEntryId() < 0) {
                     // If the ledger is the first ledger,  the find result should be null,
@@ -119,11 +121,11 @@ public class PersistentMessageFinder implements AsyncCallbacks.FindEntryCallback
                 return Pair.of(start, null);
             }
             // If the timestamp is less than the first message in the ledger
-            if (minMaxPublishTimestamp.getLeft() < timestamp) {
+            if (minPublishTimestamp < timestamp) {
                 start = PositionImpl.get(info.getLedgerId(), 0);
             }
             // If the timestamp is less than the last message in the ledger
-            if (minMaxPublishTimestamp.getRight() >= timestamp) {
+            if (maxPublishTimestamp >= timestamp) {
                 end = PositionImpl.get(info.getLedgerId(), info.getEntries() - 1);
                 break;
             }
@@ -133,25 +135,23 @@ public class PersistentMessageFinder implements AsyncCallbacks.FindEntryCallback
 
 
     private Pair<Long, Long> getMinMaxPublishTimestamp(MLDataFormats.ManagedLedgerInfo.LedgerInfo ledgerInfo) {
-        List<MLDataFormats.KeyValue> properties = ledgerInfo.getPropertiesList();
-        if (CollectionUtils.isEmpty(properties)) {
+        // The ledger is not yet closed.
+        if (ledgerInfo.getTimestamp() <= 0) {
+            return Pair.of(0L, 0L);
+        }
+
+        // The ledger closed.
+        Map<String, String> properties =
+                cursor.getManagedLedger().getLedgerInfoProperties(ledgerInfo.getLedgerId());
+        if (null == properties || properties.isEmpty()) {
             return Pair.of(null, null);
         }
-        Long minPublishTimestamp = null;
-        Long maxPublishTimestamp = null;
-        for (MLDataFormats.KeyValue kv : properties) {
-            if (kv.getKey().equals(PersistentTopic.LEDGER_MIN_PUBLISH_TIMESTAMP)
-                    && NumberUtils.isCreatable(kv.getValue())) {
-                minPublishTimestamp = Long.parseLong(kv.getValue());
-            } else if (kv.getKey().equals(PersistentTopic.LEDGER_MAX_PUBLISH_TIMESTAMP)
-                    && NumberUtils.isCreatable(kv.getValue())) {
-                maxPublishTimestamp = Long.parseLong(kv.getValue());
-            }
-        }
-        if (minPublishTimestamp == null || maxPublishTimestamp == null) {
+        String minPublishTimestampStr = properties.getOrDefault(PersistentTopic.LEDGER_MIN_PUBLISH_TIMESTAMP, null);
+        String maxPublishTimestampStr = properties.getOrDefault(PersistentTopic.LEDGER_MAX_PUBLISH_TIMESTAMP, null);
+        if (!NumberUtils.isCreatable(minPublishTimestampStr) || !NumberUtils.isCreatable(maxPublishTimestampStr)) {
             return Pair.of(null, null);
         }
-        return Pair.of(minPublishTimestamp, maxPublishTimestamp);
+        return Pair.of(Long.parseLong(minPublishTimestampStr), Long.parseLong(maxPublishTimestampStr));
     }
 
     private static final Logger log = LoggerFactory.getLogger(PersistentMessageFinder.class);

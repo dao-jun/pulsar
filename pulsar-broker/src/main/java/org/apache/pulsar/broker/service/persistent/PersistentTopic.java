@@ -36,8 +36,8 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
-import java.util.NavigableMap;
 import java.util.Map;
+import java.util.NavigableMap;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -204,7 +204,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 
-public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCallback {
+public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCallback,
+        java.util.function.Consumer<Long> {
     public static final String LEDGER_MIN_PUBLISH_TIMESTAMP = "LEDGER_MIN_PUBLISH_TIMESTAMP";
     public static final String LEDGER_MAX_PUBLISH_TIMESTAMP = "LEDGER_MAX_PUBLISH_TIMESTAMP";
 
@@ -391,16 +392,9 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                 ? brokerService.getTopicOrderedExecutor().chooseThread(topic)
                 : null;
         this.ledger = ledger;
-        ledger.setLedgerInfoPropertiesGetter(ledgerId -> {
-            MutablePair<Long, Long> pair = ledgerPublishTimeMap.remove(ledgerId);
-            if (pair != null) {
-                String minPublishTimestamp = String.valueOf(pair.getLeft());
-                String maxPublishTimestamp = String.valueOf(pair.getRight());
-                return Map.of(LEDGER_MIN_PUBLISH_TIMESTAMP, minPublishTimestamp,
-                        LEDGER_MAX_PUBLISH_TIMESTAMP, maxPublishTimestamp);
-            }
-            return Collections.emptyMap();
-        });
+        if (ledger instanceof ManagedLedgerImpl ml) {
+            ml.setLedgerClosedListener(this);
+        }
         this.subscriptions = ConcurrentOpenHashMap.<String, PersistentSubscription>newBuilder()
                         .expectedItems(16)
                         .concurrencyLevel(1)
@@ -4385,5 +4379,18 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
         if (publishTime > end) {
             pair.setRight(publishTime);
         }
+    }
+
+    @Override
+    public void accept(Long ledgerId) {
+        MutablePair<Long, Long> minMaxPublishTimestamp = ledgerPublishTimeMap.remove(ledgerId);
+        if (null == minMaxPublishTimestamp) {
+            return;
+        }
+
+        ledger.addLedgerInfoProperties(ledgerId, Map.of(
+                "minPublishTime", String.valueOf(minMaxPublishTimestamp.getLeft()),
+                "maxPublishTime", String.valueOf(minMaxPublishTimestamp.getRight())
+        ));
     }
 }
