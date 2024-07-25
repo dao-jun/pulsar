@@ -1708,9 +1708,7 @@ public class Commands {
                                               int numberOfMessages) {
         //   | BROKER_ENTRY_METADATA_MAGIC_NUMBER | BROKER_ENTRY_METADATA_SIZE |         BROKER_ENTRY_METADATA         |
         //   |         2 bytes                    |       4 bytes              |    BROKER_ENTRY_METADATA_SIZE bytes   |
-
-        BrokerEntryMetadata brokerEntryMetadata = BROKER_ENTRY_METADATA.get();
-        brokerEntryMetadata.clear();
+        BrokerEntryMetadata brokerEntryMetadata = new BrokerEntryMetadata();
         for (BrokerEntryMetadataInterceptor interceptor : brokerInterceptors) {
             interceptor.intercept(brokerEntryMetadata);
             if (numberOfMessages >= 0) {
