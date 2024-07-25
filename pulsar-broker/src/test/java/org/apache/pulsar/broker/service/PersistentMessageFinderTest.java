@@ -120,8 +120,8 @@ public class PersistentMessageFinderTest extends MockedBookKeeperTestCase {
     }
 
     public static byte[] appendBrokerTimestamp(ByteBuf headerAndPayloads) throws Exception {
-        ByteBuf msgWithEntryMeta =
-                Commands.addBrokerEntryMetadata(headerAndPayloads, getBrokerEntryMetadataInterceptors(), 1);
+        ByteBuf msgWithEntryMeta = Commands.addBrokerEntryMetadata(headerAndPayloads,
+                getBrokerEntryMetadataInterceptors(), 1).getLeft();
         byte[] byteMessage = msgWithEntryMeta.nioBuffer().array();
         msgWithEntryMeta.release();
         return byteMessage;

@@ -39,6 +39,7 @@ import java.util.Set;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.lang3.tuple.Pair;
 import org.apache.commons.lang3.tuple.Triple;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.client.api.KeySharedPolicy;
@@ -1699,12 +1700,12 @@ public class Commands {
 
     public static ByteBuf addBrokerEntryMetadata(ByteBuf headerAndPayload,
                                                  Set<BrokerEntryMetadataInterceptor> interceptors) {
-        return addBrokerEntryMetadata(headerAndPayload, interceptors, -1);
+        return addBrokerEntryMetadata(headerAndPayload, interceptors, -1).getLeft();
     }
 
-    public static ByteBuf addBrokerEntryMetadata(ByteBuf headerAndPayload,
-                                                 Set<BrokerEntryMetadataInterceptor> brokerInterceptors,
-                                                 int numberOfMessages) {
+    public static Pair<ByteBuf, BrokerEntryMetadata> addBrokerEntryMetadata(ByteBuf headerAndPayload,
+                                              Set<BrokerEntryMetadataInterceptor> brokerInterceptors,
+                                              int numberOfMessages) {
         //   | BROKER_ENTRY_METADATA_MAGIC_NUMBER | BROKER_ENTRY_METADATA_SIZE |         BROKER_ENTRY_METADATA         |
         //   |         2 bytes                    |       4 bytes              |    BROKER_ENTRY_METADATA_SIZE bytes   |
 
@@ -1726,7 +1727,7 @@ public class Commands {
 
         CompositeByteBuf compositeByteBuf = PulsarByteBufAllocator.DEFAULT.compositeBuffer();
         compositeByteBuf.addComponents(true, brokerMeta, headerAndPayload);
-        return compositeByteBuf;
+        return Pair.of(compositeByteBuf, brokerEntryMetadata);
     }
 
     public static ByteBuf skipBrokerEntryMetadataIfExist(ByteBuf headerAndPayloadWithBrokerEntryMetadata) {

@@ -32,6 +32,7 @@ import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.transaction.TxnID;
+import org.apache.pulsar.common.api.proto.BrokerEntryMetadata;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.InitialPosition;
 import org.apache.pulsar.common.api.proto.CommandSubscribe.SubType;
 import org.apache.pulsar.common.api.proto.KeySharedMeta;
@@ -126,6 +127,9 @@ public interface Topic {
 
         default void setEntryTimestamp(long entryTimestamp) {
 
+        }
+
+        default void setBrokerEntryMetadata(BrokerEntryMetadata brokerEntryMetadata) {
         }
     }
 

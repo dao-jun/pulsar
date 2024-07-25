@@ -28,6 +28,8 @@ import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.mledger.impl.OpAddEntry;
 import org.apache.bookkeeper.mledger.intercept.ManagedLedgerInterceptor;
 import org.apache.commons.lang3.tuple.ImmutablePair;
+import org.apache.commons.lang3.tuple.Pair;
+import org.apache.pulsar.broker.service.Topic;
 import org.apache.pulsar.common.api.proto.BrokerEntryMetadata;
 import org.apache.pulsar.common.intercept.AppendIndexMetadataInterceptor;
 import org.apache.pulsar.common.intercept.BrokerEntryMetadataInterceptor;
@@ -89,7 +91,12 @@ public class ManagedLedgerInterceptorImpl implements ManagedLedgerInterceptor {
        if (op == null || numberOfMessages <= 0) {
            return op;
        }
-        op.setData(Commands.addBrokerEntryMetadata(op.getData(), brokerEntryMetadataInterceptors, numberOfMessages));
+       Pair<ByteBuf, BrokerEntryMetadata> pair =
+               Commands.addBrokerEntryMetadata(op.getData(), brokerEntryMetadataInterceptors, numberOfMessages);
+       if (op.getCtx() instanceof Topic.PublishContext context) {
+           context.setBrokerEntryMetadata(pair.getRight());
+       }
+        op.setData(pair.getLeft());
         return op;
     }
 

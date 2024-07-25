@@ -396,7 +396,7 @@ public class MangedLedgerInterceptorImplTest  extends MockedBookKeeperTestCase {
                 return op;
             }
             op.setData(Commands.addBrokerEntryMetadata(op.getData(), brokerEntryMetadataInterceptors,
-                    numberOfMessages));
+                    numberOfMessages).getLeft());
             if (op != null) {
                 throw new RuntimeException("throw exception before add entry for test");
             }
