@@ -53,6 +53,13 @@ public class AllocatorStatsGenerator {
 
         stats.numDirectArenas = allocator.metric().numDirectArenas();
         stats.numHeapArenas = allocator.metric().numHeapArenas();
+        stats.directMemoryActiveAllocations = stats.directArenas.stream()
+            .mapToLong(a -> a.numActiveAllocations)
+            .sum();
+        stats.heapMemoryActiveAllocations = stats.heapArenas.stream()
+            .mapToLong(a -> a.numActiveAllocations)
+            .sum();
+
         stats.numThreadLocalCaches = allocator.metric().numThreadLocalCaches();
         stats.usedHeapMemory = allocator.metric().usedHeapMemory();
         stats.usedDirectMemory = allocator.metric().usedDirectMemory();

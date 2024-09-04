@@ -31,6 +31,10 @@ public class AllocatorStats {
     public int smallCacheSize;
     public long usedDirectMemory;
     public long usedHeapMemory;
+    // The number of heap memory allocations that in use.
+    public long heapMemoryActiveAllocations;
+    // The number of direct memory allocations that in use.
+    public long directMemoryActiveAllocations;
 
     public List<PoolArenaStats> directArenas;
     public List<PoolArenaStats> heapArenas;
