@@ -3708,6 +3708,10 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         }
     }
 
+    public CompletableFuture<Consumer> getConsumer(long consumerId) {
+        return consumers.get(consumerId);
+    }
+
     private static void logAuthException(SocketAddress remoteAddress, String operation,
                                          String principal, Optional<TopicName> topic, Throwable ex) {
         String topicString = topic.map(t -> ", topic=" + t.toString()).orElse("");

@@ -124,6 +124,7 @@ import org.apache.pulsar.broker.service.GetStatsOptions;
 import org.apache.pulsar.broker.service.PersistentTopicAttributes;
 import org.apache.pulsar.broker.service.Producer;
 import org.apache.pulsar.broker.service.Replicator;
+import org.apache.pulsar.broker.service.ServerCnx;
 import org.apache.pulsar.broker.service.StreamingStats;
 import org.apache.pulsar.broker.service.Subscription;
 import org.apache.pulsar.broker.service.SubscriptionOption;
@@ -1015,7 +1016,16 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                     if (subscription instanceof PersistentSubscription persistentSubscription) {
                         checkBackloggedCursor(persistentSubscription);
                     }
-                    if (!cnx.isActive()) {
+
+                    boolean shouldCloseConsumer = false;
+                    if (cnx instanceof ServerCnx scnx) {
+                        CompletableFuture<Consumer> cf = scnx.getConsumer(consumerId);
+                        if (cf == null || cf.isDone()) {
+                            shouldCloseConsumer = true;
+                        }
+                    }
+
+                    if (!cnx.isActive() || shouldCloseConsumer) {
                         try {
                             consumer.close();
                         } catch (BrokerServiceException e) {
@@ -1037,7 +1047,8 @@ public class PersistentTopic extends AbstractTopic implements Topic, AddEntryCal
                         decrementUsageCount();
                         return FutureUtil.failedFuture(
                                 new BrokerServiceException.ConnectionClosedException(
-                                        "Connection was closed while the opening the cursor "));
+                                        "Connection was closed while the opening the cursor "
+                                                + "or the consumer is closed by client."));
                     } else {
                         checkReplicatedSubscriptionControllerState();
                         if (log.isDebugEnabled()) {
