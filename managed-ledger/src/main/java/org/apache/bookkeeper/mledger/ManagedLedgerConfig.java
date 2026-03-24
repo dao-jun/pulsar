@@ -107,7 +107,7 @@ public class ManagedLedgerConfig {
      */
     @Getter
     @Setter
-    private long batchReadMaxSizeBytes = 0;
+    private int batchReadMaxSizeBytes = 0;
 
     /**
      * Returns whether batch read is enabled for this managed ledger.
