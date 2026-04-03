@@ -196,7 +196,7 @@ public class RangeEntryCacheImplTest {
         ManagedLedgerImpl mockManagedLedger = mock(ManagedLedgerImpl.class);
         ManagedLedgerConfig conf = mock(ManagedLedgerConfig.class);
         when(conf.isBatchReadEnabled()).thenReturn(false);
-        when(conf.getBatchReadMaxSizeBytes()).thenReturn((long) 0);
+        when(conf.getBatchReadMaxSizeBytes()).thenReturn(0);
         when(mockManagedLedger.getConfig()).thenReturn(conf);
         ManagedLedgerMBeanImpl mockManagedLedgerMBean = mock(ManagedLedgerMBeanImpl.class);
         when(mockManagedLedger.getMbean()).thenReturn(mockManagedLedgerMBean);

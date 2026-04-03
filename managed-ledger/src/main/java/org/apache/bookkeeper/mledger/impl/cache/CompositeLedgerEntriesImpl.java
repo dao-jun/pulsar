@@ -26,26 +26,26 @@ import java.util.List;
 import org.apache.bookkeeper.client.api.LedgerEntries;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 
-public class CombinedLedgerEntriesImpl implements LedgerEntries {
+public class CompositeLedgerEntriesImpl implements LedgerEntries {
     private List<LedgerEntry> entries;
     private List<LedgerEntries> ledgerEntries;
-    private final Recycler.Handle<CombinedLedgerEntriesImpl> recyclerHandle;
+    private final Recycler.Handle<CompositeLedgerEntriesImpl> recyclerHandle;
 
-    private CombinedLedgerEntriesImpl(Recycler.Handle<CombinedLedgerEntriesImpl> recyclerHandle) {
+    private CompositeLedgerEntriesImpl(Recycler.Handle<CompositeLedgerEntriesImpl> recyclerHandle) {
         this.recyclerHandle = recyclerHandle;
     }
 
-    private static final Recycler<CombinedLedgerEntriesImpl> RECYCLER = new Recycler<>() {
+    private static final Recycler<CompositeLedgerEntriesImpl> RECYCLER = new Recycler<>() {
         @Override
-        protected CombinedLedgerEntriesImpl newObject(Recycler.Handle<CombinedLedgerEntriesImpl> handle) {
-            return new CombinedLedgerEntriesImpl(handle);
+        protected CompositeLedgerEntriesImpl newObject(Recycler.Handle<CompositeLedgerEntriesImpl> handle) {
+            return new CompositeLedgerEntriesImpl(handle);
         }
     };
 
     public static LedgerEntries create(List<LedgerEntry> entries, List<LedgerEntries> ledgerEntries) {
         checkArgument(!entries.isEmpty(), "entries for create should not be empty.");
         checkArgument(!ledgerEntries.isEmpty(), "ledgerEntries for create should not be empty.");
-        CombinedLedgerEntriesImpl instance = RECYCLER.get();
+        CompositeLedgerEntriesImpl instance = RECYCLER.get();
         instance.entries = entries;
         instance.ledgerEntries = ledgerEntries;
         return instance;

@@ -19,11 +19,8 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-
-import org.apache.bookkeeper.client.AsyncCallback;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.LedgerEntries;
 import org.apache.bookkeeper.client.api.LedgerEntry;
@@ -68,7 +65,7 @@ class ReadEntryUtils {
         int numberOfEntries = (int) (lastEntry - firstEntry + 1);
 
         // Use batch read for multiple entries when enabled.
-        if (batchReadEnabled && numberOfEntries > 1 && batchReadMaxSize > 1 && handle instanceof LedgerHandle lh) {
+        if (batchReadEnabled && numberOfEntries > 1 && batchReadMaxSize > 0 && handle instanceof LedgerHandle lh) {
             if (log.isDebugEnabled()) {
                 log.debug("Using batch read for ledger {} entries {}-{}, maxCount={}, maxSize={}",
                         handle.getId(), firstEntry, lastEntry, numberOfEntries, batchReadMaxSize);
@@ -96,7 +93,7 @@ class ReadEntryUtils {
                                 "Batch read returned no entries for ledger " + lh.getId()
                                         + " starting from entry " + firstEntry));
                     } else {
-                        future.complete(CombinedLedgerEntriesImpl.create(receivedEntries, ledgerEntries));
+                        future.complete(CompositeLedgerEntriesImpl.create(receivedEntries, ledgerEntries));
                     }
                 });
         return future;
@@ -106,11 +103,6 @@ class ReadEntryUtils {
     private static CompletableFuture<Void> batchRead(LedgerHandle lh, long firstEntry, int maxCount,
                                                      int entriesToRead, int maxSize, List<LedgerEntry> receivedEntries,
                                                      List<LedgerEntries> ledgerEntries) {
-        lh.asyncBatchReadUnconfirmedEntries(firstEntry, entriesToRead, maxSize, (rc, lh1, seq, ctx) -> {
-
-        }, null);
-
-
         return lh.batchReadAsync(firstEntry, entriesToRead, maxSize)
                 .thenCompose(entries -> {
                     long lastReceivedEntry = -1;

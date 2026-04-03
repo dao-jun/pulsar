@@ -2336,7 +2336,7 @@ public class ServiceConfiguration implements PulsarConfiguration {
             doc = "Enable batch read API when reading entries from bookkeeper. "
                     + "Batch read allows reading multiple entries in a single RPC call, "
                     + "reducing network overhead for sequential reads.")
-    private boolean managedLedgerBatchReadEnabled = true;
+    private boolean managedLedgerBatchReadEnabled = false;
 
     @FieldContext(category = CATEGORY_STORAGE_ML,
             doc = "Configure the threshold (in number of entries) from where a cursor should be considered 'backlogged'"
