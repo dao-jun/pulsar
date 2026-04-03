@@ -48,9 +48,6 @@ import com.google.common.collect.Sets;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.util.concurrent.DefaultThreadFactory;
-import it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
-import it.unimi.dsi.fastutil.longs.LongLongPair;
-import it.unimi.dsi.fastutil.longs.LongSortedSet;
 import java.lang.reflect.Field;
 import java.nio.ReadOnlyBufferException;
 import java.nio.charset.Charset;
@@ -5348,37 +5345,6 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         assertEquals(cursor.getProperties(), expectedProperties);
     }
 
-    @Test
-    public void testToRanges() {
-        LongSortedSet set = new LongAVLTreeSet();
-        set.add(1L);
-        set.add(2L);
-        set.add(4L);
-        set.add(6L);
-        set.add(7L);
-        set.add(8L);
-        set.add(10L);
-
-        List<LongLongPair> ranges = ManagedLedgerImpl.toRanges(set);
-        assertEquals(ranges.size(), 4);
-
-        LongLongPair pair0 = ranges.get(0);
-        assertEquals(pair0.firstLong(), 1L);
-        assertEquals(pair0.secondLong(), 2L);
-
-        LongLongPair pair1 = ranges.get(1);
-        assertEquals(pair1.firstLong(), 4L);
-        assertEquals(pair1.secondLong(), 4L);
-
-        LongLongPair pair2 = ranges.get(2);
-        assertEquals(pair2.firstLong(), 6L);
-        assertEquals(pair2.secondLong(), 8L);
-
-        LongLongPair pair3 = ranges.get(3);
-        assertEquals(pair3.firstLong(), 10L);
-        assertEquals(pair3.secondLong(), 10L);
-    }
-
 
     @Test
     public void testBatchReadEntriesCallback() throws Exception {
@@ -5408,12 +5374,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
             }
         }, null, ledger.lastConfirmedEntry, position -> position.getEntryId() % 2 == 0, true);
 
-        LongSortedSet entryIds = new LongAVLTreeSet();
-        entryIds.add(1L);
-        entryIds.add(3L);
-        entryIds.add(5L);
-        entryIds.add(7L);
-        entryIds.add(9L);
+        List<Long> entryIds = List.of(1L, 3L, 5L, 7L, 9L);
         ManagedLedgerImpl.BatchReadEntriesCallback callback = new ManagedLedgerImpl
                 .BatchReadEntriesCallback(entryIds, opReadEntry, null);
         long ledgerId = ledger.currentLedger.getId();
@@ -5535,5 +5496,198 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         Position readPosition = cursor.getReadPosition();
         assertTrue(readPosition.getLedgerId() == lastPosition.getLedgerId()
                 && readPosition.getEntryId() == lastPosition.getEntryId() + 1);
+    }
+
+    // ===== Unit tests for buildRanges =====
+
+    private static List<Pair<Long, Long>> callBuildRanges(long firstEntry, long lastEntry, long ledgerId,
+                                                           Predicate<Position> skipCondition,
+                                                           List<Long> entryIds) {
+        return ManagedLedgerImpl.buildRanges(firstEntry, lastEntry, ledgerId, skipCondition, entryIds);
+    }
+
+    @Test
+    public void testBuildRangesNoSkip() {
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 4, 1, pos -> false, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0).getLeft().longValue(), 0L);
+        assertEquals(ranges.get(0).getRight().longValue(), 4L);
+        assertEquals(entryIds, Arrays.asList(0L, 1L, 2L, 3L, 4L));
+    }
+
+    @Test
+    public void testBuildRangesAllSkipped() {
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 4, 1, pos -> true, entryIds);
+
+        assertTrue(ranges.isEmpty());
+        assertTrue(entryIds.isEmpty());
+    }
+
+    @Test
+    public void testBuildRangesSingleEntryNotSkipped() {
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(5, 5, 1, pos -> false, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0).getLeft().longValue(), 5L);
+        assertEquals(ranges.get(0).getRight().longValue(), 5L);
+        assertEquals(entryIds, Collections.singletonList(5L));
+    }
+
+    @Test
+    public void testBuildRangesSingleEntrySkipped() {
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(5, 5, 1, pos -> true, entryIds);
+
+        assertTrue(ranges.isEmpty());
+        assertTrue(entryIds.isEmpty());
+    }
+
+    @Test
+    public void testBuildRangesSkipFirst() {
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 4, 1,
+                pos -> pos.getEntryId() == 0, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0).getLeft().longValue(), 1L);
+        assertEquals(ranges.get(0).getRight().longValue(), 4L);
+        assertEquals(entryIds, Arrays.asList(1L, 2L, 3L, 4L));
+    }
+
+    @Test
+    public void testBuildRangesSkipLast() {
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 4, 1,
+                pos -> pos.getEntryId() == 4, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0).getLeft().longValue(), 0L);
+        assertEquals(ranges.get(0).getRight().longValue(), 3L);
+        assertEquals(entryIds, Arrays.asList(0L, 1L, 2L, 3L));
+    }
+
+    @Test
+    public void testBuildRangesMultipleDisjointRanges() {
+        // Skip entry 2 and 5: ranges should be [0,1], [3,4], [6,6]
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 6, 1,
+                pos -> pos.getEntryId() == 2 || pos.getEntryId() == 5, entryIds);
+
+        assertEquals(ranges.size(), 3);
+        assertEquals(ranges.get(0).getLeft().longValue(), 0L);
+        assertEquals(ranges.get(0).getRight().longValue(), 1L);
+        assertEquals(ranges.get(1).getLeft().longValue(), 3L);
+        assertEquals(ranges.get(1).getRight().longValue(), 4L);
+        assertEquals(ranges.get(2).getLeft().longValue(), 6L);
+        assertEquals(ranges.get(2).getRight().longValue(), 6L);
+        assertEquals(entryIds, Arrays.asList(0L, 1L, 3L, 4L, 6L));
+    }
+
+    @Test
+    public void testBuildRangesConsecutiveSkipsInMiddle() {
+        // Skip entries 2,3,4: ranges should be [0,1], [5,6]
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 6, 1,
+                pos -> pos.getEntryId() >= 2 && pos.getEntryId() <= 4, entryIds);
+
+        assertEquals(ranges.size(), 2);
+        assertEquals(ranges.get(0).getLeft().longValue(), 0L);
+        assertEquals(ranges.get(0).getRight().longValue(), 1L);
+        assertEquals(ranges.get(1).getLeft().longValue(), 5L);
+        assertEquals(ranges.get(1).getRight().longValue(), 6L);
+        assertEquals(entryIds, Arrays.asList(0L, 1L, 5L, 6L));
+    }
+
+    @Test
+    public void testBuildRangesSkipEvenEntries() {
+        // Skip even entries: each range is a single entry [1,1], [3,3], [5,5]
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 5, 1,
+                pos -> pos.getEntryId() % 2 == 0, entryIds);
+
+        assertEquals(ranges.size(), 3);
+        assertEquals(ranges.get(0), Pair.of(1L, 1L));
+        assertEquals(ranges.get(1), Pair.of(3L, 3L));
+        assertEquals(ranges.get(2), Pair.of(5L, 5L));
+        assertEquals(entryIds, Arrays.asList(1L, 3L, 5L));
+    }
+
+    @Test
+    public void testBuildRangesPredicateUsesLedgerId() {
+        // Skip entries in ledger 1, but predicate checks ledgerId
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 2, 1,
+                pos -> pos.getLedgerId() == 1, entryIds);
+
+        assertTrue(ranges.isEmpty());
+        assertTrue(entryIds.isEmpty());
+
+        // Now with a different ledgerId, nothing should be skipped
+        entryIds = new ArrayList<>();
+        ranges = callBuildRanges(0, 2, 2,
+                pos -> pos.getLedgerId() == 1, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0), Pair.of(0L, 2L));
+        assertEquals(entryIds, Arrays.asList(0L, 1L, 2L));
+    }
+
+    @Test
+    public void testBuildRangesLargeEntryIds() {
+        List<Long> entryIds = new ArrayList<>();
+        // Use values large enough to test long range but not so large as to overflow
+        // the ArrayList capacity calculation in the caller
+        long first = 999_999_999_999L;
+        long last = 999_999_999_999L + 2;
+        List<Pair<Long, Long>> ranges = callBuildRanges(first, last, 1, pos -> false, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0).getLeft().longValue(), first);
+        assertEquals(ranges.get(0).getRight().longValue(), last);
+        assertEquals(entryIds.size(), 3);
+        assertEquals(entryIds.get(0).longValue(), first);
+        assertEquals(entryIds.get(2).longValue(), last);
+    }
+
+    @Test
+    public void testBuildRangesOnlyMiddleKept() {
+        // Only keep entry 3, skip everything else
+        List<Long> entryIds = new ArrayList<>();
+        List<Pair<Long, Long>> ranges = callBuildRanges(0, 6, 1,
+                pos -> pos.getEntryId() != 3, entryIds);
+
+        assertEquals(ranges.size(), 1);
+        assertEquals(ranges.get(0), Pair.of(3L, 3L));
+        assertEquals(entryIds, Collections.singletonList(3L));
+    }
+
+    @Test
+    public void testBuildRangesEmptyEntriesIdsList() {
+        // Verify entryIds list starts empty and is populated correctly
+        List<Long> entryIds = new ArrayList<>();
+        callBuildRanges(10, 12, 5, pos -> pos.getEntryId() == 11, entryIds);
+
+        assertEquals(entryIds, Arrays.asList(10L, 12L));
+    }
+
+    @Test
+    public void testBuildRangesPositionFieldsCorrect() {
+        // Verify that the predicate receives correct ledgerId and entryId
+        List<Long> seenLedgerIds = new ArrayList<>();
+        List<Long> seenEntryIds = new ArrayList<>();
+        List<Long> entryIds = new ArrayList<>();
+
+        callBuildRanges(3, 5, 99, pos -> {
+            seenLedgerIds.add(pos.getLedgerId());
+            seenEntryIds.add(pos.getEntryId());
+            return false;
+        }, entryIds);
+
+        assertEquals(seenLedgerIds, Arrays.asList(99L, 99L, 99L));
+        assertEquals(seenEntryIds, Arrays.asList(3L, 4L, 5L));
     }
 }

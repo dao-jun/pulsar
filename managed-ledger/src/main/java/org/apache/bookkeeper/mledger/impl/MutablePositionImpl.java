@@ -22,8 +22,10 @@ import org.apache.bookkeeper.mledger.Position;
 
 final class MutablePositionImpl implements Position {
 
-    private volatile long ledgerId;
-    private volatile long entryId;
+    // Non-volatile: this class is designed for single-threaded reuse within a method scope
+    // and should not be shared across threads or stored as a long-lived reference.
+    private long ledgerId;
+    private long entryId;
 
     MutablePositionImpl(long ledgerId, long entryId) {
         this.ledgerId = ledgerId;

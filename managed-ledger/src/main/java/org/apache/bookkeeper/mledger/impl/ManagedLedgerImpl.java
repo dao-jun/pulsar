@@ -31,9 +31,6 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import io.netty.util.Recycler;
 import io.netty.util.Recycler.Handle;
-import it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
-import it.unimi.dsi.fastutil.longs.LongLongPair;
-import it.unimi.dsi.fastutil.longs.LongSortedSet;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -2398,16 +2395,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             return;
         }
 
-        // Skip entries that don't match the predicate
-        LongSortedSet entryIds = new LongAVLTreeSet();
-        MutablePositionImpl position = new MutablePositionImpl();
-        for (long entryId = firstEntry; entryId <= lastEntry; entryId++) {
-            position.changePositionTo(ledger.getId(), entryId);
-            if (skipCondition.test(position)) {
-                continue;
-            }
-            entryIds.add(entryId);
-        }
+        // Scan entries and build contiguous read ranges, skipping entries that match the predicate
+        List<Long> entryIds = new ArrayList<>((int) (lastEntry - firstEntry + 1));
+        List<Pair<Long, Long>> ranges = buildRanges(firstEntry, lastEntry, ledger.getId(),
+                skipCondition, entryIds);
 
         Position lastReadPosition = PositionFactory.create(ledger.getId(), lastEntry);
         if (entryIds.isEmpty()) {
@@ -2417,45 +2408,65 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             return;
         }
 
-        List<LongLongPair> ranges = toRanges(entryIds);
         ReadEntriesCallback callback = new BatchReadEntriesCallback(entryIds, opReadEntry, lastReadPosition);
-        for (LongLongPair pair : ranges) {
-            long start = pair.firstLong();
-            long end = pair.secondLong();
-            asyncReadEntry(ledger, start, end, opReadEntry.cursor, callback, opReadEntry.ctx);
+        for (Pair<Long, Long> pair : ranges) {
+            asyncReadEntry(ledger, pair.getLeft(), pair.getRight(),
+                    opReadEntry.cursor, callback, opReadEntry.ctx);
         }
     }
 
+    /**
+     * Scan entry range [firstEntry, lastEntry], skipping entries where skipCondition returns true,
+     * and build contiguous read ranges directly.
+     *
+     * @param firstEntry first entry id to scan (inclusive)
+     * @param lastEntry last entry id to scan (inclusive)
+     * @param ledgerId the ledger id for building positions
+     * @param skipCondition predicate to determine which entries to skip
+     * @param entryIds output list that collects all non-skipped entry ids in order
+     * @return list of contiguous [start, end] pairs
+     */
     @VisibleForTesting
-    public static List<LongLongPair> toRanges(LongSortedSet entryIds) {
-        List<LongLongPair> ranges = new ArrayList<>();
-        long start = entryIds.firstLong();
-        long end = start;
-        for (long entryId : entryIds) {
-            if (entryId - end > 1) {
-                ranges.add(LongLongPair.of(start, end));
-                start = entryId;
-                end = start;
-            } else {
-                end = entryId;
+    public static List<Pair<Long, Long>> buildRanges(long firstEntry, long lastEntry, long ledgerId,
+                                                      Predicate<Position> skipCondition,
+                                                      List<Long> entryIds) {
+        MutablePositionImpl position = new MutablePositionImpl();
+        List<Pair<Long, Long>> ranges = new ArrayList<>();
+        long rangeStart = -1;
+        long rangeEnd = -1;
+        for (long entryId = firstEntry; entryId <= lastEntry; entryId++) {
+            position.changePositionTo(ledgerId, entryId);
+            if (skipCondition.test(position)) {
+                if (rangeStart != -1) {
+                    ranges.add(ImmutablePair.of(rangeStart, rangeEnd));
+                    rangeStart = -1;
+                }
+                continue;
             }
+            if (rangeStart == -1) {
+                rangeStart = entryId;
+            }
+            rangeEnd = entryId;
+            entryIds.add(entryId);
         }
-        ranges.add(LongLongPair.of(start, end));
+        if (rangeStart != -1) {
+            ranges.add(ImmutablePair.of(rangeStart, rangeEnd));
+        }
         return ranges;
     }
 
     @VisibleForTesting
     public static class BatchReadEntriesCallback implements ReadEntriesCallback {
-        private final LongSortedSet entryIds;
+        private final List<Long> entryIds;
         private final List<Entry> entries;
         private final OpReadEntry callback;
         private volatile boolean completed = false;
         private final Position lastReadPosition;
 
         @VisibleForTesting
-        public BatchReadEntriesCallback(LongSortedSet entryIdSet, OpReadEntry callback, Position lastReadPosition) {
-            this.entryIds = entryIdSet;
-            this.entries = new ArrayList<>(entryIdSet.size());
+        public BatchReadEntriesCallback(List<Long> entryIds, OpReadEntry callback, Position lastReadPosition) {
+            this.entryIds = entryIds;
+            this.entries = new ArrayList<>(entryIds.size());
             this.callback = callback;
             this.lastReadPosition = lastReadPosition;
         }
@@ -2475,7 +2486,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
                 return;
             }
             completed = true;
-            // Make sure the entries are in the correct order
+            // Sort to ensure correct order since async range reads may complete out of submission order.
             entries.sort(ManagedCursorImpl.ENTRY_COMPARATOR);
             // If we want to read [1, 2, 3, 4, 5], but we only read [1, 2, 3], [4,5] are filtered, so we need to pass
             // the `lastReadPosition([5])` to make sure the cursor read position is correct.
@@ -2515,23 +2526,24 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             if (entries.isEmpty()) {
                 return Collections.emptyList();
             }
+            // Sort first since async range reads may complete out of submission order.
             entries.sort(ManagedCursorImpl.ENTRY_COMPARATOR);
             List<Entry> entries0 = new ArrayList<>();
-            for (long entryId : entryIds) {
-                if (this.entries.isEmpty()) {
-                    break;
-                }
-                Entry entry = this.entries.remove(0);
-                if (entry.getEntryId() == entryId) {
+            int entryIdx = 0;
+            for (int i = 0; i < entryIds.size() && entryIdx < entries.size(); i++) {
+                Entry entry = entries.get(entryIdx);
+                if (entry.getEntryId() == entryIds.get(i)) {
                     entries0.add(entry);
+                    entryIdx++;
                 } else {
                     entry.release();
+                    entryIdx++;
                     break;
                 }
             }
             // Release the entries that are not in the result.
-            for (Entry entry : entries) {
-                entry.release();
+            for (int i = entryIdx; i < entries.size(); i++) {
+                entries.get(i).release();
             }
             return entries0;
         }
