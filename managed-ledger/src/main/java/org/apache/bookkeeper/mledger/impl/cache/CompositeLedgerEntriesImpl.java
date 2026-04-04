@@ -52,6 +52,9 @@ public class CompositeLedgerEntriesImpl implements LedgerEntries {
     }
 
     private void recycle() {
+        if (ledgerEntries == null) {
+            return;
+        }
         ledgerEntries.forEach(LedgerEntries::close);
         entries = null;
         ledgerEntries = null;
