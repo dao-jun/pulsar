@@ -131,12 +131,15 @@ public class ReadEntryUtilsTest {
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK read failed")));
         // Fallback also fails to verify the exception propagates
         when(lh.readUnconfirmedAsync(0L, 4L))
-                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK read failed")));
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("readUnconfirmed also failed")));
 
         CompletableFuture<LedgerEntries> future =
                 ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
 
         assertThat(future).isCompletedExceptionally();
+        assertThatThrownBy(future::get)
+                .hasCauseInstanceOf(RuntimeException.class)
+                .hasRootCauseMessage("readUnconfirmed also failed");
     }
 
     @Test
@@ -282,24 +285,6 @@ public class ReadEntryUtilsTest {
         // Should fail without falling back to readUnconfirmedAsync
         assertThat(future).isCompletedExceptionally();
         verify(lh, never()).readUnconfirmedAsync(anyLong(), anyLong());
-    }
-
-    @Test
-    public void testBatchReadFailureFallbackAlsoFails() {
-        // Batch read fails
-        when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
-                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK batch read failed")));
-        // Fallback also fails
-        when(lh.readUnconfirmedAsync(0L, 4L))
-                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("readUnconfirmed also failed")));
-
-        CompletableFuture<LedgerEntries> future =
-                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
-
-        assertThat(future).isCompletedExceptionally();
-        assertThatThrownBy(future::get)
-                .hasCauseInstanceOf(RuntimeException.class)
-                .hasRootCauseMessage("readUnconfirmed also failed");
     }
 
     @Test
