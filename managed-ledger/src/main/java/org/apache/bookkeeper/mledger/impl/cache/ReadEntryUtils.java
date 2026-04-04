@@ -86,7 +86,23 @@ class ReadEntryUtils {
                 .whenComplete((v, t) -> {
                     if (t != null) {
                         ledgerEntries.forEach(LedgerEntries::close);
-                        future.completeExceptionally(t);
+                        if (receivedEntries.isEmpty()) {
+                            long lastEntry = firstEntry + maxCount - 1;
+                            // First batch failed with no data received, fall back to readUnconfirmedAsync
+                            log.warn("Batch read failed for ledger {} entries {}-{}, falling back to readUnconfirmed",
+                                    lh.getId(), firstEntry, lastEntry, t);
+                            lh.readUnconfirmedAsync(firstEntry, lastEntry)
+                                    .whenComplete((result, fallbackError) -> {
+                                        if (fallbackError != null) {
+                                            future.completeExceptionally(fallbackError);
+                                        } else {
+                                            future.complete(result);
+                                        }
+                                    });
+                        } else {
+                            // Partial data received before failure, propagate the error
+                            future.completeExceptionally(t);
+                        }
                     } else if (receivedEntries.isEmpty()) {
                         ledgerEntries.forEach(LedgerEntries::close);
                         future.completeExceptionally(new ManagedLedgerException(

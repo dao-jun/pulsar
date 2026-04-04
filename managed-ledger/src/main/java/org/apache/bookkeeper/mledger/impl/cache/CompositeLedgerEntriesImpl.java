@@ -67,7 +67,13 @@ public class CompositeLedgerEntriesImpl implements LedgerEntries {
             throw new IndexOutOfBoundsException("required index: " + entryId
                     + " is out of bounds: [ " + firstId + ", " + lastId + " ].");
         }
-        return entries.get((int) (entryId - firstId));
+        int index = (int) (entryId - firstId);
+        LedgerEntry entry = entries.get(index);
+        if (entry.getEntryId() != entryId) {
+            throw new IllegalStateException("Non-contiguous entries detected: expected entryId "
+                    + entryId + " at index " + index + " but found entryId " + entry.getEntryId());
+        }
+        return entry;
     }
 
     @Override

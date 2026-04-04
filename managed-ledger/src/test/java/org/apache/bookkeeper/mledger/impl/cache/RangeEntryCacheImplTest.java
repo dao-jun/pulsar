@@ -20,20 +20,24 @@ package org.apache.bookkeeper.mledger.impl.cache;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntSupplier;
+import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.LedgerEntries;
 import org.apache.bookkeeper.client.api.LedgerEntry;
 import org.apache.bookkeeper.client.api.ReadHandle;
@@ -42,6 +46,8 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerConfig;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
+import org.apache.bookkeeper.mledger.Position;
+import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.bookkeeper.mledger.impl.EntryImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerFactoryMBeanImpl;
 import org.apache.bookkeeper.mledger.impl.ManagedLedgerImpl;
@@ -242,6 +248,87 @@ public class RangeEntryCacheImplTest {
             assertThat(entries.get(0).getEntryId()).isEqualTo(0L);
         });
         assertThat(readAttempts.get()).isEqualTo(2);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    @Test
+    public void testReadFromStorageWithBatchReadEnabled() {
+        RangeEntryCacheManagerImpl mockEntryCacheManager = mock(RangeEntryCacheManagerImpl.class);
+        ManagedLedgerFactoryMBeanImpl mlFactoryMBean = mock(ManagedLedgerFactoryMBeanImpl.class);
+        when(mockEntryCacheManager.getMlFactoryMBean()).thenReturn(mlFactoryMBean);
+
+        ManagedLedgerImpl mockManagedLedger = mock(ManagedLedgerImpl.class);
+        ManagedLedgerConfig conf = mock(ManagedLedgerConfig.class);
+        when(conf.isBatchReadEnabled()).thenReturn(true);
+        when(conf.getBatchReadMaxSizeBytes()).thenReturn(1024 * 1024);
+        when(mockManagedLedger.getConfig()).thenReturn(conf);
+
+        ManagedLedgerMBeanImpl mockManagedLedgerMBean = mock(ManagedLedgerMBeanImpl.class);
+        when(mockManagedLedger.getMbean()).thenReturn(mockManagedLedgerMBean);
+        when(mockManagedLedger.getName()).thenReturn("testManagedLedger");
+        when(mockManagedLedger.getExecutor()).thenReturn(mock(java.util.concurrent.ExecutorService.class));
+        Position lastConfirmedEntry = PositionFactory.create(1L, 99L);
+        when(mockManagedLedger.getLastConfirmedEntry()).thenReturn(lastConfirmedEntry);
+        when(mockManagedLedger.getOptionalLedgerInfo(1L)).thenReturn((Optional) Optional.of(new Object()));
+
+        RangeCacheRemovalQueue mockRangeCacheRemovalQueue = mock(RangeCacheRemovalQueue.class);
+        when(mockRangeCacheRemovalQueue.addEntry(any())).thenReturn(true);
+        InflightReadsLimiter inflightReadsLimiter = mock(InflightReadsLimiter.class);
+        when(mockEntryCacheManager.getInflightReadsLimiter()).thenReturn(inflightReadsLimiter);
+        doAnswer(invocation -> {
+            long permits = invocation.getArgument(0);
+            InflightReadsLimiter.Handle handle =
+                    new InflightReadsLimiter.Handle(permits, System.currentTimeMillis(), true);
+            return Optional.of(handle);
+        }).when(inflightReadsLimiter).acquire(anyLong(), any());
+
+        RangeEntryCacheImpl cache = new RangeEntryCacheImpl(mockEntryCacheManager, mockManagedLedger, false,
+                mockRangeCacheRemovalQueue, EntryLengthFunction.DEFAULT, mock(PendingReadsManager.class));
+
+        // Use LedgerHandle mock (not ReadHandle) so instanceof LedgerHandle check passes
+        LedgerHandle ledgerHandle = mock(LedgerHandle.class);
+        when(ledgerHandle.getId()).thenReturn(1L);
+
+        // Create test entries for batch read
+        List<LedgerEntry> entryList = new ArrayList<>();
+        for (long i = 0; i <= 4; i++) {
+            entryList.add(LedgerEntryImpl.create(1L, i, 1, Unpooled.wrappedBuffer(new byte[]{(byte) i})));
+        }
+        LedgerEntries batchResult = new LedgerEntries() {
+            @Override
+            public LedgerEntry getEntry(long eid) {
+                for (LedgerEntry e : entryList) {
+                    if (e.getEntryId() == eid) {
+                        return e;
+                    }
+                }
+                throw new IndexOutOfBoundsException("Entry " + eid + " not found");
+            }
+
+            @Override
+            public Iterator<LedgerEntry> iterator() {
+                return entryList.iterator();
+            }
+
+            @Override
+            public void close() {
+                entryList.forEach(LedgerEntry::close);
+            }
+        };
+
+        when(ledgerHandle.batchReadAsync(eq(0L), eq(5), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(batchResult));
+
+        CompletableFuture<List<Entry>> future = cache.readFromStorage(ledgerHandle, 0L, 4L, () -> 1);
+
+        assertThat(future).isCompleted();
+        List<Entry> entries = future.getNow(null);
+        assertThat(entries).hasSize(5);
+        for (int i = 0; i < 5; i++) {
+            assertThat(entries.get(i).getEntryId()).isEqualTo(i);
+        }
+        // Verify batch read was used, not readUnconfirmedAsync
+        verify(ledgerHandle, never()).readUnconfirmedAsync(anyLong(), anyLong());
     }
 
     private void performReadAndValidateResult() {

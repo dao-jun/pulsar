@@ -173,6 +173,35 @@ public class CompositeLedgerEntriesImplTest {
         combined.close();
     }
 
+    @Test
+    public void testGetEntryWithNonContiguousEntries() {
+        // Create entries with a gap: IDs 5, 6, 8 (missing 7)
+        LedgerEntryImpl e5 = createEntry(1L, 5L, new byte[]{0});
+        LedgerEntryImpl e6 = createEntry(1L, 6L, new byte[]{1});
+        LedgerEntryImpl e8 = createEntry(1L, 8L, new byte[]{2});
+
+        List<LedgerEntry> entries = new ArrayList<>();
+        entries.add(e5);
+        entries.add(e6);
+        entries.add(e8);
+
+        List<LedgerEntries> containers = new ArrayList<>();
+        containers.add(new MockLedgerEntries(entries));
+
+        CompositeLedgerEntriesImpl combined = (CompositeLedgerEntriesImpl) CompositeLedgerEntriesImpl.create(
+                entries, containers);
+
+        // Valid entries should still work
+        assertThat(combined.getEntry(5L).getEntryId()).isEqualTo(5L);
+        assertThat(combined.getEntry(6L).getEntryId()).isEqualTo(6L);
+        // Entry 7 computes index 2 (7-5=2), but entries.get(2) has ID 8, not 7 — should throw
+        assertThatThrownBy(() -> combined.getEntry(7L))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Non-contiguous");
+
+        combined.close();
+    }
+
     /**
      * Simple LedgerEntries implementation for testing.
      */

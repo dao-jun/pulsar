@@ -19,6 +19,7 @@
 package org.apache.bookkeeper.mledger.impl.cache;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
@@ -32,6 +33,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.LedgerEntries;
 import org.apache.bookkeeper.client.api.LedgerEntry;
@@ -127,6 +129,9 @@ public class ReadEntryUtilsTest {
     public void testBatchReadFailure() {
         when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
                 .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK read failed")));
+        // Fallback also fails to verify the exception propagates
+        when(lh.readUnconfirmedAsync(0L, 4L))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK read failed")));
 
         CompletableFuture<LedgerEntries> future =
                 ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
@@ -204,7 +209,155 @@ public class ReadEntryUtilsTest {
         future.getNow(null).close();
     }
 
-    // --- helper ---
+    @Test
+    public void testAutoRefillWithSizeLimitedReturns() {
+        // Simulate: first batch returns only entries 0-1 (size-limited),
+        // second batch returns entries 2-4 to complete the read
+        LedgerEntries batch1 = createLedgerEntriesWithSizes(1L,
+                new long[]{0, 1}, new int[]{256, 256});
+        LedgerEntries batch2 = createLedgerEntriesWithSizes(1L,
+                new long[]{2, 3, 4}, new int[]{128, 128, 128});
+
+        when(lh.batchReadAsync(eq(0L), eq(5), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(batch1));
+        when(lh.batchReadAsync(eq(2L), eq(3), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(batch2));
+
+        CompletableFuture<LedgerEntries> future =
+                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
+
+        assertThat(future).isCompleted();
+        LedgerEntries result = future.getNow(null);
+        try {
+            List<Long> entryIds = new ArrayList<>();
+            for (LedgerEntry e : result) {
+                entryIds.add(e.getEntryId());
+            }
+            assertThat(entryIds).containsExactly(0L, 1L, 2L, 3L, 4L);
+        } finally {
+            result.close();
+        }
+    }
+
+    @Test
+    public void testBatchReadFailureFallsBackToReadUnconfirmed() {
+        // First batch read fails
+        when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK batch read failed")));
+        // Fallback succeeds
+        LedgerEntries fallbackResult = createLedgerEntries(1L, 0, 1, 2, 3, 4);
+        when(lh.readUnconfirmedAsync(0L, 4L))
+                .thenReturn(CompletableFuture.completedFuture(fallbackResult));
+
+        CompletableFuture<LedgerEntries> future =
+                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
+
+        assertThat(future).isCompleted();
+        LedgerEntries result = future.getNow(null);
+        try {
+            List<Long> entryIds = new ArrayList<>();
+            for (LedgerEntry e : result) {
+                entryIds.add(e.getEntryId());
+            }
+            assertThat(entryIds).containsExactly(0L, 1L, 2L, 3L, 4L);
+        } finally {
+            result.close();
+        }
+        verify(lh).readUnconfirmedAsync(0L, 4L);
+    }
+
+    @Test
+    public void testBatchReadFailureWithPartialDataDoesNotFallback() {
+        // First batch succeeds with entries 0-2
+        LedgerEntries batch1 = createLedgerEntries(1L, 0, 1, 2);
+        when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(batch1));
+        // Second batch fails
+        when(lh.batchReadAsync(eq(3L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Second batch failed")));
+
+        CompletableFuture<LedgerEntries> future =
+                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
+
+        // Should fail without falling back to readUnconfirmedAsync
+        assertThat(future).isCompletedExceptionally();
+        verify(lh, never()).readUnconfirmedAsync(anyLong(), anyLong());
+    }
+
+    @Test
+    public void testBatchReadFailureFallbackAlsoFails() {
+        // Batch read fails
+        when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("BK batch read failed")));
+        // Fallback also fails
+        when(lh.readUnconfirmedAsync(0L, 4L))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("readUnconfirmed also failed")));
+
+        CompletableFuture<LedgerEntries> future =
+                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
+
+        assertThat(future).isCompletedExceptionally();
+        assertThatThrownBy(future::get)
+                .hasCauseInstanceOf(RuntimeException.class)
+                .hasRootCauseMessage("readUnconfirmed also failed");
+    }
+
+    @Test
+    public void testBatchReadMidBatchFailureCleansUpResources() {
+        // Track whether the first batch's LedgerEntries is closed
+        AtomicBoolean batch1Closed = new AtomicBoolean(false);
+        LedgerEntries batch1Inner = createLedgerEntries(1L, 0, 1, 2);
+        LedgerEntries trackedBatch1 = new LedgerEntries() {
+            @Override
+            public LedgerEntry getEntry(long eid) {
+                return batch1Inner.getEntry(eid);
+            }
+
+            @Override
+            public Iterator<LedgerEntry> iterator() {
+                return batch1Inner.iterator();
+            }
+
+            @Override
+            public void close() {
+                batch1Closed.set(true);
+                batch1Inner.close();
+            }
+        };
+
+        when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(trackedBatch1));
+        when(lh.batchReadAsync(eq(3L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Second batch failed")));
+
+        CompletableFuture<LedgerEntries> future =
+                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
+
+        assertThat(future).isCompletedExceptionally();
+        // Verify first batch resources were cleaned up
+        assertThat(batch1Closed.get()).isTrue();
+        // Verify no fallback since partial data was received
+        verify(lh, never()).readUnconfirmedAsync(anyLong(), anyLong());
+    }
+
+    @Test
+    public void testBatchReadMidBatchFailurePreservesOriginalException() {
+        LedgerEntries batch1 = createLedgerEntries(1L, 0, 1, 2);
+        when(lh.batchReadAsync(eq(0L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(batch1));
+        when(lh.batchReadAsync(eq(3L), anyInt(), anyLong()))
+                .thenReturn(CompletableFuture.failedFuture(new RuntimeException("Second batch read failed")));
+
+        CompletableFuture<LedgerEntries> future =
+                ReadEntryUtils.readAsync(ml, lh, 0L, 4L, true, 1024);
+
+        assertThat(future).isCompletedExceptionally();
+        assertThatThrownBy(future::get)
+                .hasCauseInstanceOf(RuntimeException.class)
+                .hasRootCauseMessage("Second batch read failed");
+    }
+
+    // --- helpers ---
 
     private static LedgerEntries createLedgerEntries(long ledgerId, long... entryIds) {
         List<LedgerEntry> entries = new ArrayList<>();
@@ -212,6 +365,20 @@ public class ReadEntryUtilsTest {
             entries.add(LedgerEntryImpl.create(ledgerId, entryId, 1,
                     Unpooled.wrappedBuffer(new byte[]{(byte) entryId})));
         }
+        return wrapLedgerEntries(entries);
+    }
+
+    private static LedgerEntries createLedgerEntriesWithSizes(long ledgerId, long[] entryIds, int[] sizes) {
+        List<LedgerEntry> entries = new ArrayList<>();
+        for (int i = 0; i < entryIds.length; i++) {
+            byte[] data = new byte[sizes[i]];
+            entries.add(LedgerEntryImpl.create(ledgerId, entryIds[i], sizes[i],
+                    Unpooled.wrappedBuffer(data)));
+        }
+        return wrapLedgerEntries(entries);
+    }
+
+    private static LedgerEntries wrapLedgerEntries(List<LedgerEntry> entries) {
         return new LedgerEntries() {
             @Override
             public LedgerEntry getEntry(long eid) {
