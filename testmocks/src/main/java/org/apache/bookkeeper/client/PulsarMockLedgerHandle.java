@@ -279,6 +279,34 @@ public class PulsarMockLedgerHandle extends LedgerHandle {
         return readHandle.batchReadAsync(startEntry, maxCount, maxSize);
     }
 
+    @Override
+    public void asyncBatchReadUnconfirmedEntries(long startEntry, int maxCount, long maxSize, ReadCallback cb,
+                                                 Object ctx) {
+        batchReadAsync(startEntry, maxCount, maxSize)
+                .whenCompleteAsync((ledgerEntries, t) -> {
+                    if (t != null) {
+                        cb.readComplete(PulsarMockBookKeeper.getExceptionCode(t), PulsarMockLedgerHandle.this,
+                                       null, ctx);
+                    } else {
+                        Queue<LedgerEntry> seq = new ArrayDeque<>();
+                        for (var entry : ledgerEntries) {
+                            seq.add(new LedgerEntry(LedgerEntryImpl.duplicate(entry)));
+                        }
+                        ledgerEntries.close();
+                        Enumeration<LedgerEntry> enumeration = new Enumeration<>() {
+                            @Override
+                            public boolean hasMoreElements() {
+                                return !seq.isEmpty();
+                            }
+                            @Override
+                            public LedgerEntry nextElement() {
+                                return seq.remove();
+                            }
+                        };
+                        cb.readComplete(BKException.Code.OK, PulsarMockLedgerHandle.this, enumeration, ctx);
+                    }
+                }, bk.executor);
+    }
 
     private static LedgerMetadata createMetadata(long id, DigestType digest, byte[] passwd) {
         List<BookieId> ensemble = new ArrayList<>(PulsarMockBookKeeper.getMockEnsemble());
