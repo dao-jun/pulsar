@@ -211,8 +211,7 @@ public class Producer {
         MessagePublishContext messagePublishContext =
                 MessagePublishContext.get(this, sequenceId, headersAndPayload.readableBytes(),
                         batchSize, isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
-        if (checkAndStartPublish(producerId, sequenceId, headersAndPayload, batchSize, position,
-                messagePublishContext)) {
+        if (checkAndStartPublish(producerId, sequenceId, headersAndPayload, position, messagePublishContext)) {
             publishMessageToTopic(headersAndPayload, messagePublishContext);
         } else {
             messagePublishContext.recycle();
@@ -232,15 +231,14 @@ public class Producer {
         MessagePublishContext messagePublishContext = MessagePublishContext.get(this, lowestSequenceId,
                 highestSequenceId, headersAndPayload.readableBytes(), batchSize,
                 isChunked, System.nanoTime(), isMarker, position, isSupportsReplDedupByLidAndEid());
-        if (checkAndStartPublish(producerId, highestSequenceId, headersAndPayload, batchSize, position,
-                messagePublishContext)) {
+        if (checkAndStartPublish(producerId, highestSequenceId, headersAndPayload, position, messagePublishContext)) {
             publishMessageToTopic(headersAndPayload, messagePublishContext);
         } else {
             messagePublishContext.recycle();
         }
     }
 
-    public boolean checkAndStartPublish(long producerId, long sequenceId, ByteBuf headersAndPayload, int batchSize,
+    public boolean checkAndStartPublish(long producerId, long sequenceId, ByteBuf headersAndPayload,
                                         Position position, PublishContext publishContext) {
         if (!isShadowTopic && position != null) {
             cnx.execute(() -> {
@@ -291,7 +289,7 @@ public class Producer {
             }
         }
 
-        startPublishOperation((int) batchSize, headersAndPayload.readableBytes());
+        startPublishOperation((int) publishContext.getNumberOfMessages(), headersAndPayload.readableBytes());
         return true;
     }
 
@@ -879,8 +877,7 @@ public class Producer {
                 MessagePublishContext.get(this, sequenceId, highSequenceId,
                         headersAndPayload.readableBytes(), batchSize, isChunked, System.nanoTime(), isMarker, null,
                         cnx.isClientSupportsReplDedupByLidAndEid());
-        if (!checkAndStartPublish(producerId, sequenceId, headersAndPayload, batchSize, null,
-                messagePublishContext)) {
+        if (!checkAndStartPublish(producerId, sequenceId, headersAndPayload, null, messagePublishContext)) {
             messagePublishContext.recycle();
             return;
         }
