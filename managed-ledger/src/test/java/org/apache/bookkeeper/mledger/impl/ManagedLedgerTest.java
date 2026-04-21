@@ -5353,6 +5353,54 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
     }
 
     @Test
+    public void testSyncFailureOnFirstRangeStopsSubmittingLaterRanges() throws Exception {
+        @Cleanup
+        ManagedLedgerImpl ledger =
+                (ManagedLedgerImpl) factory.open("testSyncFailureOnFirstRangeStopsSubmittingLaterRanges");
+        ledger = Mockito.spy(ledger);
+        @Cleanup
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("test-cursor");
+        for (int i = 0; i < 6; i++) {
+            ledger.addEntry(("dummy-entry-" + i).getBytes(Encoding));
+        }
+
+        CountDownLatch latch = new CountDownLatch(1);
+        AtomicInteger submitCount = new AtomicInteger();
+        AtomicReference<ManagedLedgerException> callbackFailure = new AtomicReference<>();
+        Mockito.doAnswer(inv -> {
+            int invocationCount = submitCount.incrementAndGet();
+            if (invocationCount == 1) {
+                ReadEntriesCallback callback = inv.getArgument(4);
+                Object ctx = inv.getArgument(5);
+                callback.readEntriesFailed(
+                        new ManagedLedgerException.TooManyRequestsException("inflight limiter rejected read"), ctx);
+                return null;
+            }
+            fail("should not submit later ranges after the first range fails synchronously");
+            return null;
+        }).when(ledger).asyncReadEntry(Mockito.any(ReadHandle.class), Mockito.anyLong(),
+                Mockito.anyLong(), Mockito.any(ManagedCursorImpl.class), Mockito.any(ReadEntriesCallback.class),
+                Mockito.any());
+
+        cursor.asyncReadEntriesWithSkip(10, -1, new ReadEntriesCallback() {
+            @Override
+            public void readEntriesComplete(List<Entry> entries, Object ctx) {
+                fail("expected readEntriesFailed");
+            }
+
+            @Override
+            public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
+                callbackFailure.set(exception);
+                latch.countDown();
+            }
+        }, null, PositionFactory.LATEST, position -> position.getEntryId() % 2 == 0);
+
+        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        assertEquals(submitCount.get(), 1);
+        assertTrue(callbackFailure.get() instanceof ManagedLedgerException.TooManyRequestsException);
+    }
+
+    @Test
     public void testReadEntriesFromDifferentLedgersWithSkipCondition() throws Exception {
         ManagedLedgerConfig config = new ManagedLedgerConfig();
         config.setMaxEntriesPerLedger(5);

@@ -2383,10 +2383,14 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             return;
         }
 
-        ReadEntriesCallback callback = new BatchReadEntriesCallback(entryIds, opReadEntry, lastReadPosition);
+        ManagedCursorImpl cursor = opReadEntry.cursor;
+        Object ctx = opReadEntry.ctx;
+        BatchReadEntriesCallback callback = new BatchReadEntriesCallback(entryIds, opReadEntry, lastReadPosition);
         for (Pair<Long, Long> pair : ranges) {
-            asyncReadEntry(ledger, pair.getLeft(), pair.getRight(),
-                    opReadEntry.cursor, callback, opReadEntry.ctx);
+            if (callback.isCompleted()) {
+                break;
+            }
+            asyncReadEntry(ledger, pair.getLeft(), pair.getRight(), cursor, callback, ctx);
         }
     }
 
@@ -2444,6 +2448,10 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             this.entries = new ArrayList<>(entryIds.size());
             this.callback = callback;
             this.lastReadPosition = lastReadPosition;
+        }
+
+        boolean isCompleted() {
+            return completed;
         }
 
         @Override
