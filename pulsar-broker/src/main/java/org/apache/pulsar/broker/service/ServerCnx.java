@@ -2193,19 +2193,20 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
     }
 
     private void printSendCommandDebug(CommandSend send, ByteBuf headersAndPayload) {
-        headersAndPayload.markReaderIndex();
-        MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
-        headersAndPayload.resetReaderIndex();
-        log.debug()
-                .attr("producerId", send.getProducerId())
-                .attr("sendSequenceId", send.getSequenceId())
-                .attr("producerName", msgMetadata.getProducerName())
-                .attr("metadataSequenceId", msgMetadata.getSequenceId())
-                .attr("readableBytes", headersAndPayload.readableBytes())
-                .attr("partitionKey", msgMetadata.hasPartitionKey() ? msgMetadata.getPartitionKey() : null)
-                .attr("orderingKey", msgMetadata.hasOrderingKey() ? msgMetadata.getOrderingKey() : null)
-                .attr("uncompressedSize", msgMetadata.getUncompressedSize())
-                .log("Received send message request");
+        log.debug(event -> {
+            headersAndPayload.markReaderIndex();
+            MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
+            headersAndPayload.resetReaderIndex();
+            event.attr("producerId", send.getProducerId())
+                    .attr("sendSequenceId", send.getSequenceId())
+                    .attr("producerName", msgMetadata.getProducerName())
+                    .attr("metadataSequenceId", msgMetadata.getSequenceId())
+                    .attr("readableBytes", headersAndPayload.readableBytes())
+                    .attr("partitionKey", msgMetadata.hasPartitionKey() ? msgMetadata.getPartitionKey() : null)
+                    .attr("orderingKey", msgMetadata.hasOrderingKey() ? msgMetadata.getOrderingKey() : null)
+                    .attr("uncompressedSize", msgMetadata.getUncompressedSize())
+                    .log("Received send message request");
+        });
     }
 
     @Override

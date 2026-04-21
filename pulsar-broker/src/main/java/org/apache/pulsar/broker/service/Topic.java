@@ -28,6 +28,7 @@ import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.service.persistent.DispatchRateLimiter;
 import org.apache.pulsar.broker.service.persistent.SubscribeRateLimiter;
 import org.apache.pulsar.broker.service.plugin.EntryFilter;
+import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.broker.stats.ClusterReplicationMetrics;
 import org.apache.pulsar.broker.stats.NamespaceStats;
 import org.apache.pulsar.client.api.MessageId;
@@ -42,6 +43,7 @@ import org.apache.pulsar.common.policies.data.HierarchyTopicPolicies;
 import org.apache.pulsar.common.policies.data.PersistentTopicInternalStats;
 import org.apache.pulsar.common.policies.data.Policies;
 import org.apache.pulsar.common.policies.data.stats.TopicStatsImpl;
+import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.schema.SchemaData;
 import org.apache.pulsar.common.protocol.schema.SchemaVersion;
 import org.apache.pulsar.common.util.FutureUtil;
@@ -83,6 +85,12 @@ public interface Topic {
         void completed(Exception e, long ledgerId, long entryId);
 
         default void setMetadataFromEntryData(ByteBuf entryData) {
+        }
+
+        default MessageMetadata getMessageMetadata(ByteBuf headersAndPayload) {
+            MessageMetadata messageMetadata = new MessageMetadata();
+            Commands.peekMessageMetadata(headersAndPayload, messageMetadata);
+            return messageMetadata;
         }
 
         default long getHighestSequenceId() {
