@@ -18,7 +18,7 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     id("pulsar.test-certs-conventions")
 }
 
@@ -29,6 +29,7 @@ tasks.withType<Test> {
 }
 
 dependencies {
+    implementation(libs.slog)
     implementation(project(":pulsar-broker"))
     implementation(project(":pulsar-broker-common"))
     implementation(project(":pulsar-common"))
@@ -37,7 +38,6 @@ dependencies {
     implementation(libs.commons.lang3)
     implementation(libs.commons.codec)
     implementation(libs.javax.servlet.api)
-    implementation(libs.slf4j.api)
     implementation(libs.simpleclient.caffeine)
 
     testImplementation(libs.commons.io)

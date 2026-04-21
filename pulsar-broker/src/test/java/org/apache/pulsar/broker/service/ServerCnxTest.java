@@ -45,10 +45,14 @@ import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.DefaultChannelId;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.GenericFutureListener;
 import io.vertx.core.impl.ConcurrentHashSet;
 import java.io.Closeable;
 import java.io.IOException;
@@ -75,7 +79,7 @@ import java.util.stream.Collectors;
 import javax.naming.AuthenticationException;
 import lombok.AllArgsConstructor;
 import lombok.Cleanup;
-import lombok.extern.slf4j.Slf4j;
+import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.AddEntryCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.CloseCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.DeleteCursorCallback;
@@ -171,7 +175,7 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-@Slf4j
+@CustomLog
 @SuppressWarnings("unchecked")
 @Test(groups = "broker")
 public class ServerCnxTest {
@@ -208,7 +212,6 @@ public class ServerCnxTest {
     private ManagedCursor cursorMock;
     private ConcurrentHashSet<EmbeddedChannel> channelsStoppedAnswerHealthCheck = new ConcurrentHashSet<>();
     private ManagedLedgerFactory managedLedgerFactory;
-
 
     @BeforeMethod(alwaysRun = true)
     public void setup() throws Exception {
@@ -2133,6 +2136,13 @@ public class ServerCnxTest {
                 producerName, Collections.emptyMap(), false);
         channel.writeInbound(createProducer1);
 
+        // Run pending tasks to ensure the producer is registered in the producers map
+        // before the close command is processed. Without this, the close command may not
+        // find the producer (since registration happens in a thenApplyAsync callback),
+        // causing it to skip cancellation and leading to a race between the first and
+        // second producer creation.
+        channel.runPendingTasks();
+
         ByteBuf closeProducer = Commands.newCloseProducer(1 /* producer id */, 2 /* request id */);
         channel.writeInbound(closeProducer);
 
@@ -2479,6 +2489,35 @@ public class ServerCnxTest {
         assertTrue(channel.isActive());
 
         channel.finish();
+    }
+
+    @Test
+    public void testCloseConsumerClosesConnectionWhenWriteFails() throws Exception {
+        resetChannel();
+        setChannelConnected();
+
+        var ctx = mock(ChannelHandlerContext.class);
+        var writeFuture = mock(ChannelFuture.class);
+        var writeFailure = new RuntimeException("close consumer write failed");
+        when(ctx.writeAndFlush(any())).thenReturn(writeFuture);
+        when(writeFuture.isSuccess()).thenReturn(false);
+        when(writeFuture.cause()).thenReturn(writeFailure);
+        when(writeFuture.addListener(any())).thenAnswer(invocation -> {
+            GenericFutureListener<Future<? super Void>>  listener = invocation.getArgument(0);
+            listener.operationComplete(writeFuture);
+            return writeFuture;
+        });
+        serverCnx.setCtx(ctx);
+
+        var consumer = mock(Consumer.class);
+        when(consumer.consumerId()).thenReturn(1L);
+
+        serverCnx.setRemoteEndpointProtocolVersion(ProtocolVersion.v12.getValue());
+
+        serverCnx.closeConsumer(consumer, Optional.empty());
+
+        verify(ctx).writeAndFlush(any());
+        verify(ctx).close();
     }
 
     @Test(timeOut = 30000)
@@ -3038,7 +3077,6 @@ public class ServerCnxTest {
 
         resetChannel();
         setChannelConnected();
-
 
         channel.writeInbound(Commands.newLookup(invalidTopicName, true, 1));
         Object obj = getResponse();
@@ -3778,7 +3816,6 @@ public class ServerCnxTest {
         channel.finish();
     }
 
-
     @Test(timeOut = 30000)
     public void sendEndTxnResponse() throws Exception {
         final TransactionMetadataStoreService txnStore = mock(TransactionMetadataStoreService.class);
@@ -3924,7 +3961,6 @@ public class ServerCnxTest {
 
         channel.finish();
     }
-
 
     @Test(timeOut = 30000)
     public void sendEndTxnOnSubscriptionFailed() throws Exception {

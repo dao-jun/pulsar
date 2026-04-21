@@ -42,6 +42,8 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Range;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
+import io.opentelemetry.sdk.autoconfigure.AutoConfiguredOpenTelemetrySdk;
+import io.opentelemetry.sdk.testing.exporter.InMemoryMetricReader;
 import java.lang.reflect.Field;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
@@ -84,6 +86,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import lombok.Cleanup;
+import lombok.CustomLog;
 import org.apache.bookkeeper.client.AsyncCallback.OpenCallback;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
@@ -118,6 +121,7 @@ import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo;
 import org.apache.bookkeeper.mledger.proto.PositionInfo;
 import org.apache.bookkeeper.mledger.util.ManagedLedgerTestUtil;
 import org.apache.bookkeeper.mledger.util.ManagedLedgerUtils;
+import org.apache.bookkeeper.stats.NullStatsLogger;
 import org.apache.bookkeeper.test.MockedBookKeeperTestCase;
 import org.apache.commons.collections4.iterators.EmptyIterator;
 import org.apache.commons.lang3.mutable.MutableBoolean;
@@ -135,13 +139,12 @@ import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
+@CustomLog
 public class ManagedCursorTest extends MockedBookKeeperTestCase {
 
     private static final Charset Encoding = StandardCharsets.UTF_8;
@@ -955,7 +958,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             cursor.resetCursor(resetPosition);
             moveStatus.set(true);
         } catch (Exception e) {
-            log.warn("error in reset cursor", e.getCause());
+            log.warn().exception(e.getCause()).log("error in reset cursor");
         }
 
         assertTrue(moveStatus.get());
@@ -988,7 +991,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             cursor.resetCursor(earliest);
             moveStatus.set(true);
         } catch (Exception e) {
-            log.warn("error in reset cursor", e.getCause());
+            log.warn().exception(e.getCause()).log("error in reset cursor");
         }
         assertTrue(moveStatus.get());
         Position earliestPos = PositionFactory.create(actualEarliest.getLedgerId(), -1);
@@ -1001,7 +1004,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             cursor.resetCursor(resetPosition);
             moveStatus.set(true);
         } catch (Exception e) {
-            log.warn("error in reset cursor", e.getCause());
+            log.warn().exception(e.getCause()).log("error in reset cursor");
         }
         assertTrue(moveStatus.get());
         assertEquals(firstInNext, cursor.getReadPosition());
@@ -1013,7 +1016,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             cursor.resetCursor(latest);
             moveStatus.set(true);
         } catch (Exception e) {
-            log.warn("error in reset cursor", e.getCause());
+            log.warn().exception(e.getCause()).log("error in reset cursor");
         }
         assertTrue(moveStatus.get());
         Position lastPos = PositionFactory.create(last.getLedgerId() + 1, 0);
@@ -1028,7 +1031,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
             cursor.resetCursor(anotherLast);
             moveStatus.set(true);
         } catch (Exception e) {
-            log.warn("error in reset cursor", e.getCause());
+            log.warn().exception(e.getCause()).log("error in reset cursor");
         }
         assertTrue(moveStatus.get());
         assertEquals(lastPos, cursor.getReadPosition());
@@ -1106,7 +1109,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
                         public void resetComplete(Object ctx) {
                             moveStatus.set(true);
                             Position pos = (Position) ctx;
-                            log.info("move to [{}] completed for consumer [{}]", pos.toString(), idx);
+                            log.info().attr("position", pos.toString()).attr("consumer", idx).log("move completed");
                             countDownLatch.countDown();
                         }
 
@@ -1114,7 +1117,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
                         public void resetFailed(ManagedLedgerException exception, Object ctx) {
                             moveStatus.set(false);
                             Position pos = (Position) ctx;
-                            log.warn("move to [{}] failed for consumer [{}]", pos.toString(), idx);
+                            log.warn().attr("position", pos.toString()).attr("consumer", idx).log("move failed");
                             countDownLatch.countDown();
                         }
                     });
@@ -1264,10 +1267,10 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         Position p3 = ledger.addEntry("dummy-entry-3".getBytes(Encoding));
         Position p4 = ledger.addEntry("dummy-entry-4".getBytes(Encoding));
 
-        log.debug("p1: {}", p1);
-        log.debug("p2: {}", p2);
-        log.debug("p3: {}", p3);
-        log.debug("p4: {}", p4);
+        log.debug().attr("p1", p1).log("position p1");
+        log.debug().attr("p2", p2).log("position p2");
+        log.debug().attr("p3", p3).log("position p3");
+        log.debug().attr("p4", p4).log("position p4");
 
         assertEquals(c1.getNumberOfEntries(), 4);
         assertEquals(c1.getNumberOfEntriesInBacklog(false), 4);
@@ -1621,7 +1624,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         ledger = factory2.open("async_mark_delete_blocking_test_ledger");
         ManagedCursor c2 = ledger.openCursor("c1");
 
-        log.info("positions size: {}, positions: {}", positions.size(), positions);
+        log.info().attr("size", positions.size()).attr("positions", positions).log("positions info");
         // To make sure ManagedLedgerImpl.maybeUpdateCursorBeforeTrimmingConsumedLedger() is completed, we should
         // wait until c2.getMarkDeletedPosition() equals 15:-1, see PR https://github.com/apache/pulsar/pull/25087.
         Awaitility.await()
@@ -1703,7 +1706,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
 
                 @Override
                 public void markDeleteFailed(ManagedLedgerException exception, Object ctx) {
-                    log.error("Failed to markdelete", exception);
+                    log.error().exception(exception).log("Failed to markdelete");
                     latch.countDown();
                 }
             }, null);
@@ -2005,7 +2008,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertEquals(cursor.getNumberOfEntries(), 3);
         assertEquals(cursor.getNumberOfEntriesInBacklog(false), 6);
 
-        log.info("Deleting {}", p5);
+        log.info().attr("position", p5).log("Deleting position");
         cursor.delete(p5);
 
         assertEquals(cursor.getNumberOfEntries(), 2);
@@ -2356,7 +2359,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
 
                 @Override
                 public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-                    log.error("Error reading", exception);
+                    log.error().exception(exception).log("Error reading");
                 }
             }, null, PositionFactory.LATEST);
         }
@@ -3019,7 +3022,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
                 long publishTime = Long.parseLong(new String(entry.getData()));
                 return publishTime <= timestamp;
             } catch (Exception e) {
-                log.error("Error de-serializing message for message position find", e);
+                log.error().exception(e).log("Error de-serializing message for message position find");
             } finally {
                 entry.release();
             }
@@ -3868,10 +3871,13 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         long actualBacklogSize = cursor.getEstimatedSizeSinceMarkDeletePosition();
         Position markDeletePos = cursor.getMarkDeletedPosition();
 
-        log.info("Backlog size after individual acks:");
-        log.info("  Expected: {}. Actual: {}", expectedBacklogSize, actualBacklogSize);
-        log.info("  Mark delete position: {}", markDeletePos);
-        log.info("  Individual deleted: {}", ((ManagedCursorImpl) cursor).getIndividuallyDeletedMessagesSet());
+        log.info("Backlog size after individual acks");
+        log.info().attr("expected", expectedBacklogSize).attr("actual", actualBacklogSize)
+                .log("Backlog size comparison");
+        log.info().attr("markDeletePosition", markDeletePos).log("Mark delete position");
+        log.info().attr("individualDeleted",
+                ((ManagedCursorImpl) cursor).getIndividuallyDeletedMessagesSet())
+                .log("Individual deleted messages");
 
         // After fix: backlog size should now correctly account for individual deletions
         assertEquals(actualBacklogSize, expectedBacklogSize,
@@ -5870,7 +5876,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
 
         long firstLedgerId = positions.get(0).getLedgerId();
         long secondLedgerId = positions.get(10).getLedgerId();
-        log.info("First ledger id is {}, Second ledger id is {}", firstLedgerId, secondLedgerId);
+        log.info().attr("firstLedgerId", firstLedgerId).attr("secondLedgerId", secondLedgerId).log("Ledger IDs");
 
         ManagedLedgerImpl spyLedger = spy(ledgerImpl);
 
@@ -5891,7 +5897,7 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
 
             @Override
             public void readEntriesFailed(ManagedLedgerException exception, Object ctx) {
-                log.error("Read failed", exception);
+                log.error().exception(exception).log("Read failed");
                 readLatch.countDown();
             }
         };
@@ -6029,6 +6035,147 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         assertEquals(properties.get(propertyKey), lastIndex - 1);
     }
 
+    @DataProvider(name = "rangesTruncationScenarios")
+    public static Object[][] rangesTruncationScenarios() {
+        // maxRanges, totalEntries, shouldTruncate.
+        return new Object[][] {
+                { 5, 16, true },   // 8 ack holes, above limit 5 → truncation
+                { 10, 6, false },  // 3 ack holes, limit 10 → no truncation
+                { 5, 6, false },   // 3 ack holes, limit 5 → no truncation
+        };
+    }
+
+    @Test(timeOut = 20000, dataProvider = "rangesTruncationScenarios")
+    public void testPersistUnackedRangesTruncatedCounter(int maxRanges, int totalEntries, boolean shouldTruncate)
+            throws Exception {
+        @Cleanup
+        InMemoryMetricReader metricReader = InMemoryMetricReader.create();
+        @Cleanup
+        var openTelemetry = AutoConfiguredOpenTelemetrySdk.builder()
+                .disableShutdownHook()
+                .addPropertiesSupplier(() -> Map.of("otel.metrics.exporter", "none",
+                        "otel.traces.exporter", "none",
+                        "otel.logs.exporter", "none"))
+                .addMeterProviderCustomizer((builder, __) -> builder.registerMetricReader(metricReader))
+                .build()
+                .getOpenTelemetrySdk();
+
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl otelFactory = new ManagedLedgerFactoryImpl(
+                metadataStore,
+                (policyConfig) -> CompletableFuture.completedFuture(bkc),
+                new ManagedLedgerFactoryConfig(), NullStatsLogger.INSTANCE, openTelemetry);
+
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setMaxUnackedRangesToPersist(maxRanges);
+        // Force persistence through the ledger path (not metadata store).
+        config.setMaxUnackedRangesToPersistInMetadataStore(0);
+
+        String ledgerName = "my-tenant/my-ns/persistent/test-persist-unacked-ranges-truncated-" + UUID.randomUUID();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) otelFactory.open(ledgerName, config);
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("c1");
+
+        List<Position> positions = new ArrayList<>();
+        for (int i = 0; i < totalEntries; i++) {
+            positions.add(ledger.addEntry(("entry-" + i).getBytes(Encoding)));
+        }
+        // Ack alternating positions to create ack holes in the cursor.
+        for (int i = 1; i < positions.size(); i += 2) {
+            cursor.delete(positions.get(i));
+        }
+
+        ledger.close();
+
+        long truncationCount = metricReader.collectAllMetrics().stream()
+                .filter(m -> OpenTelemetryManagedCursorStats.PERSIST_UNACKED_RANGES_TRUNCATED.equals(m.getName()))
+                .flatMap(m -> m.getLongSumData().getPoints().stream())
+                .mapToLong(point -> point.getValue())
+                .sum();
+
+        // Direction only: persist cadence during close() is not a stable contract.
+        if (shouldTruncate) {
+            assertTrue(truncationCount >= 1, "expected truncation, was " + truncationCount);
+
+            ManagedLedgerImpl reopened = (ManagedLedgerImpl) otelFactory.open(ledgerName, config);
+            ManagedCursorImpl recovered = (ManagedCursorImpl) reopened.openCursor("c1");
+            assertEquals(recovered.getIndividuallyDeletedMessagesSet().asRanges().size(), maxRanges,
+                    "persisted range count must equal maxRanges");
+        } else {
+            assertEquals(truncationCount, 0L, "expected no truncation, was " + truncationCount);
+        }
+    }
+
+    @DataProvider(name = "batchIndexesTruncationScenarios")
+    public static Object[][] batchIndexesTruncationScenarios() {
+        // maxBatchIndexes, totalEntries, shouldTruncate.
+        return new Object[][] {
+                { 5, 16, true },   // 16 batch entries, above limit 5 → truncation
+                { 10, 6, false },  // 6 batch entries, limit 10 → no truncation
+                { 5, 5, false },   // 5 batch entries at exact limit → no truncation
+        };
+    }
+
+    @Test(timeOut = 20000, dataProvider = "batchIndexesTruncationScenarios")
+    public void testPersistBatchDeletedIndexesTruncatedCounter(int maxBatchIndexes, int totalEntries,
+            boolean shouldTruncate) throws Exception {
+        @Cleanup
+        InMemoryMetricReader metricReader = InMemoryMetricReader.create();
+        @Cleanup
+        var openTelemetry = AutoConfiguredOpenTelemetrySdk.builder()
+                .disableShutdownHook()
+                .addPropertiesSupplier(() -> Map.of("otel.metrics.exporter", "none",
+                        "otel.traces.exporter", "none",
+                        "otel.logs.exporter", "none"))
+                .addMeterProviderCustomizer((builder, __) -> builder.registerMetricReader(metricReader))
+                .build()
+                .getOpenTelemetrySdk();
+
+        @Cleanup("shutdown")
+        ManagedLedgerFactoryImpl otelFactory = new ManagedLedgerFactoryImpl(
+                metadataStore,
+                (policyConfig) -> CompletableFuture.completedFuture(bkc),
+                new ManagedLedgerFactoryConfig(), NullStatsLogger.INSTANCE, openTelemetry);
+
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setMaxBatchDeletedIndexToPersist(maxBatchIndexes);
+        config.setDeletionAtBatchIndexLevelEnabled(true);
+        config.setMaxUnackedRangesToPersistInMetadataStore(0);
+
+        String ledgerName = "my-tenant/my-ns/persistent/test-persist-batch-deleted-indexes-truncated-"
+                + UUID.randomUUID();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) otelFactory.open(ledgerName, config);
+        ManagedCursorImpl cursor = (ManagedCursorImpl) ledger.openCursor("c1");
+
+        List<Position> positions = new ArrayList<>();
+        for (int i = 0; i < totalEntries; i++) {
+            positions.add(ledger.addEntry(("entry-" + i).getBytes(Encoding)));
+        }
+        // Partial-ack each position so it lands in batchDeletedIndexes rather than individualDeletedMessages.
+        for (Position position : positions) {
+            BitSet ackSet = new BitSet(10);
+            ackSet.set(0, 10);
+            ackSet.clear(0);
+            cursor.delete(AckSetStateUtil.createPositionWithAckSet(
+                    position.getLedgerId(), position.getEntryId(), ackSet.toLongArray()));
+        }
+
+        ledger.close();
+
+        long truncationCount = metricReader.collectAllMetrics().stream()
+                .filter(m -> OpenTelemetryManagedCursorStats.PERSIST_BATCH_DELETED_INDEXES_TRUNCATED
+                        .equals(m.getName()))
+                .flatMap(m -> m.getLongSumData().getPoints().stream())
+                .mapToLong(point -> point.getValue())
+                .sum();
+
+        // Direction only: persist cadence during close() is not a stable contract.
+        if (shouldTruncate) {
+            assertTrue(truncationCount >= 1, "expected truncation, was " + truncationCount);
+        } else {
+            assertEquals(truncationCount, 0L, "expected no truncation, was " + truncationCount);
+        }
+    }
+
     @SuppressWarnings("try")
     class TestPulsarMockBookKeeper extends PulsarMockBookKeeper {
         Map<Long, Integer> ledgerErrors = new HashMap<>();
@@ -6061,5 +6208,4 @@ public class ManagedCursorTest extends MockedBookKeeperTestCase {
         }
     }
 
-    private static final Logger log = LoggerFactory.getLogger(ManagedCursorTest.class);
 }

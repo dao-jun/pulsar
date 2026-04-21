@@ -63,9 +63,9 @@ import javax.ws.rs.client.WebTarget;
 import javax.ws.rs.core.Response.Status;
 import lombok.Builder;
 import lombok.Cleanup;
+import lombok.CustomLog;
 import lombok.SneakyThrows;
 import lombok.Value;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.ManagedLedgerInfo;
 import org.apache.pulsar.broker.BrokerTestUtil;
 import org.apache.pulsar.broker.PulsarServerException;
@@ -143,8 +143,6 @@ import org.apache.pulsar.common.util.ObjectMapperFactory;
 import org.apache.pulsar.compaction.Compactor;
 import org.apache.pulsar.compaction.PulsarCompactionServiceFactory;
 import org.awaitility.Awaitility;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.testng.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.AfterMethod;
@@ -152,12 +150,9 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-
-@Slf4j
+@CustomLog
 @Test(groups = "broker-admin")
 public class AdminApiTest extends MockedPulsarServiceBaseTest {
-
-    private static final Logger LOG = LoggerFactory.getLogger(AdminApiTest.class);
 
     private MockedPulsarService mockPulsarSetup;
 
@@ -485,7 +480,7 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
             }
 
         } catch (PulsarAdminException e) {
-            LOG.warn("TEST FAILED [{}]", e.getMessage());
+            log.warn().exceptionMessage(e).log("TEST FAILED");
             throw e;
         }
 
@@ -892,8 +887,9 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
                 // Already unloaded
                 break;
             }
-            LOG.info("Waiting for unload namespace {} to complete. Current service unit isDisabled: {}", defaultBundle,
-                    data1.get().isDisabled());
+            log.info().attr("namespace", defaultBundle)
+                    .attr("isDisabled", data1.get().isDisabled())
+                    .log("Waiting for unload namespace to complete");
             Thread.sleep(1000);
         }
         assertTrue(i < 10);
@@ -1053,7 +1049,7 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         TimeUnit.SECONDS.sleep(2);
         TopicStats topicStats = admin.topics().getStats(persistentTopicName);
         long msgBacklog = topicStats.getSubscriptions().get(subName).getMsgBacklog();
-        log.info("back={}", msgBacklog);
+        log.info().attr("msgBacklog", msgBacklog).log("back");
         int skipNumber = 20;
         admin.topics().skipMessages(persistentTopicName, subName, skipNumber);
         topicStats = admin.topics().getStats(persistentTopicName);
@@ -2101,7 +2097,7 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         assertFalse(otherPulsar.getNamespaceService().isServiceUnitOwned(bundle));
         pulsarClient.shutdown();
 
-        LOG.info("--- RELOAD ---");
+        log.info("--- RELOAD ---");
 
         // Force reload of namespace and wait for topic to be ready
         Awaitility.await().timeout(30, TimeUnit.SECONDS).ignoreExceptionsInstanceOf(PulsarAdminException.class)
@@ -2152,7 +2148,7 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         assertFalse(pulsar.getNamespaceService().isServiceUnitOwned(bundle));
         assertFalse(otherPulsar.getNamespaceService().isServiceUnitOwned(bundle));
 
-        LOG.info("--- RELOAD ---");
+        log.info("--- RELOAD ---");
 
         // Force reload of namespace and wait for topic to be ready
         Awaitility.await().timeout(30, TimeUnit.SECONDS).ignoreExceptionsInstanceOf(PulsarAdminException.class)
@@ -2290,6 +2286,132 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
                 .get("my-sub-2").getMsgBacklog();
         assertEquals(backlog, 0);
     }
+
+    @Test(dataProvider = "numBundles")
+    public void testClearNamespaceBundleBacklogOnUnloadedBundle(Integer numBundles) throws Exception {
+        String namespace = "prop-xyz/ns1-bundles";
+        admin.namespaces().createNamespace("prop-xyz/ns1-bundles", numBundles);
+
+        String topic = "persistent://" + namespace + "/t1";
+        String subscription = "sub1";
+
+        Consumer<byte[]> consumer = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName(subscription)
+                .subscribe();
+
+        Producer<byte[]> producer = pulsarClient.newProducer(Schema.BYTES)
+                .topic(topic)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        for (int i = 0; i < 10; i++) {
+            producer.send(("message-" + i).getBytes());
+        }
+        producer.close();
+        consumer.close();
+
+        long backlog = admin.topics().getStats(topic).getSubscriptions().get(subscription).getMsgBacklog();
+        assertEquals(backlog, 10);
+
+        NamespaceBundle bundle =
+                pulsar.getNamespaceService().getNamespaceBundleFactory().getBundle(TopicName.get(topic));
+        admin.namespaces().unloadNamespaceBundle(namespace, bundle.getBundleRange());
+
+        Awaitility.await()
+                .atMost(30, TimeUnit.SECONDS)
+                .pollInterval(200, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> {
+                    assertFalse(pulsar.getNamespaceService().isServiceUnitOwned(bundle),
+                            "Bundle should not be owned by current broker");
+                    assertFalse(otherPulsar.getNamespaceService().isServiceUnitOwned(bundle),
+                            "Bundle should not be owned by other broker");
+                });
+
+        admin.namespaces().clearNamespaceBundleBacklog(namespace, bundle.getBundleRange());
+
+        @Cleanup
+        Consumer<byte[]> consumer1 = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName(subscription)
+                .subscribe();
+
+        long backlogAfter = admin.topics().getStats(topic).getSubscriptions().get(subscription).getMsgBacklog();
+        assertEquals(backlogAfter, 0);
+    }
+
+    @Test(dataProvider = "numBundles")
+    public void testClearNamespaceBundleBacklogForSubscriptionOnUnloadedBundle(Integer numBundles) throws Exception {
+        String namespace = "prop-xyz/ns1-bundles";
+        admin.namespaces().createNamespace("prop-xyz/ns1-bundles", numBundles);
+
+        String topic = "persistent://" + namespace + "/t1";
+        String subscription = "sub1";
+        String otherSubscription = "sub2";
+
+        Consumer<byte[]> consumer1 = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName(subscription)
+                .subscribe();
+
+        Consumer<byte[]> consumer2 = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName(otherSubscription)
+                .subscribe();
+
+        Producer<byte[]> producer = pulsarClient.newProducer(Schema.BYTES)
+                .topic(topic)
+                .enableBatching(false)
+                .messageRoutingMode(MessageRoutingMode.SinglePartition)
+                .create();
+        for (int i = 0; i < 10; i++) {
+            producer.send(("message-" + i).getBytes());
+        }
+        producer.close();
+        consumer1.close();
+        consumer2.close();
+
+        long backlog = admin.topics().getStats(topic).getSubscriptions().get(subscription).getMsgBacklog();
+        assertEquals(backlog, 10);
+        long otherBacklog = admin.topics().getStats(topic).getSubscriptions().get(otherSubscription).getMsgBacklog();
+        assertEquals(otherBacklog, 10);
+
+        NamespaceBundle bundle =
+                pulsar.getNamespaceService().getNamespaceBundleFactory().getBundle(TopicName.get(topic));
+        admin.namespaces().unloadNamespaceBundle(namespace, bundle.getBundleRange());
+
+        Awaitility.await()
+                .atMost(30, TimeUnit.SECONDS)
+                .pollInterval(200, TimeUnit.MILLISECONDS)
+                .untilAsserted(() -> {
+                    assertFalse(pulsar.getNamespaceService().isServiceUnitOwned(bundle),
+                            "Bundle should not be owned by current broker");
+                    assertFalse(otherPulsar.getNamespaceService().isServiceUnitOwned(bundle),
+                            "Bundle should not be owned by other broker");
+                });
+
+        admin.namespaces().clearNamespaceBundleBacklogForSubscription(namespace, bundle.getBundleRange(),
+                subscription);
+
+        @Cleanup
+        Consumer<byte[]> consumer3 = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName(subscription)
+                .subscribe();
+
+        @Cleanup
+        Consumer<byte[]> consumer4 = pulsarClient.newConsumer()
+                .topic(topic)
+                .subscriptionName(otherSubscription)
+                .subscribe();
+
+        long backlogAfter = admin.topics().getStats(topic).getSubscriptions().get(subscription).getMsgBacklog();
+        assertEquals(backlogAfter, 0);
+        long otherBacklogAfter =
+                admin.topics().getStats(topic).getSubscriptions().get(otherSubscription).getMsgBacklog();
+        assertEquals(otherBacklogAfter, 10);
+    }
+
 
     @Test(dataProvider = "bundling")
     public void testUnsubscribeOnNamespace(Integer numBundles) throws Exception {
@@ -2805,7 +2927,8 @@ public class AdminApiTest extends MockedPulsarServiceBaseTest {
         List<Message<byte[]>> messages = admin.topics().peekMessages(topicName, "my-sub", 10);
         assertEquals(messages.size(), 10);
         messages.forEach(message -> {
-            LOG.info("Peeked message: {}", new String(message.getData()));
+            log.info().attr("message", new String(message.getData()))
+                    .log("Peeked message");
         });
 
         for (int i = 0; i < 10; i++) {

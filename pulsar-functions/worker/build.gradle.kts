@@ -18,7 +18,7 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 // Include parent module's test resources (YAML config files)
@@ -36,6 +36,7 @@ tasks.named<ProcessResources>("processTestResources") {
 }
 
 dependencies {
+    implementation(libs.slog)
     api(project(":pulsar-functions:pulsar-functions-runtime"))
     implementation(project(":pulsar-broker-common"))
     implementation(project(":pulsar-opentelemetry"))
@@ -112,6 +113,7 @@ dependencies {
 }
 
 tasks.withType<Test> {
+    dependsOn(testNars, testExamplesJar)
     // Map resolved NAR/JAR files to system properties
     val narFiles = testNars.incoming.artifacts.resolvedArtifacts
     val jarFiles = testExamplesJar.incoming.artifacts.resolvedArtifacts

@@ -59,7 +59,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import lombok.Cleanup;
-import lombok.extern.slf4j.Slf4j;
+import lombok.CustomLog;
 import org.apache.pulsar.broker.PulsarServerException;
 import org.apache.pulsar.broker.PulsarService;
 import org.apache.pulsar.broker.ServiceConfiguration;
@@ -110,7 +110,7 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
-@Slf4j
+@CustomLog
 @Test(groups = "broker")
 public class ModularLoadManagerImplTest {
 
@@ -383,7 +383,7 @@ public class ModularLoadManagerImplTest {
 
         String brokerServiceUrl = pulsar1.getBrokerServiceUrl();
         String brokerId = pulsar1.getBrokerId();
-        log.debug("initial broker service url - {}", topicLookup);
+        log.debug().attr("topicLookup", topicLookup).log("initial broker service url");
         Random rand = new Random();
 
         if (topicLookup.equals(brokerServiceUrl)) {
@@ -396,10 +396,12 @@ public class ModularLoadManagerImplTest {
                 brokerServiceUrl = pulsar3.getBrokerServiceUrl();
             }
         }
-        log.debug("destination broker service url - {}, broker url - {}", brokerServiceUrl, brokerId);
+        log.debug().attr("brokerServiceUrl", brokerServiceUrl).attr("brokerId", brokerId)
+                .log("destination broker service url");
         String leaderBrokerId = admin1.brokers().getLeaderBroker().getBrokerId();
-        log.debug("leader lookup address - {}, broker1 lookup address - {}", leaderBrokerId,
-                pulsar1.getBrokerId());
+        log.debug().attr("leaderBrokerId", leaderBrokerId)
+                .attr("broker1Id", pulsar1.getBrokerId())
+                .log("leader lookup address");
         // Make a call to broker which is not a leader
         if (!leaderBrokerId.equals(pulsar1.getBrokerId())) {
             admin1.namespaces().unloadNamespaceBundle(namespace, bundleRange, brokerId);
@@ -409,7 +411,7 @@ public class ModularLoadManagerImplTest {
 
         sleep(2000);
         String topicLookupAfterUnload = admin1.lookups().lookupTopic(topic);
-        log.debug("final broker service url - {}", topicLookupAfterUnload);
+        log.debug().attr("topicLookup", topicLookupAfterUnload).log("final broker service url");
         Assert.assertEquals(brokerServiceUrl, topicLookupAfterUnload);
     }
 
@@ -1063,6 +1065,11 @@ public class ModularLoadManagerImplTest {
         executorService.submit(latch::countDown);
         latch.await();
 
+        // Ensure lm1 has loaded broker data from both brokers before writing bundle data.
+        // Without this, lm1 may only see bundles from one broker, causing fewer than
+        // bundleNumbers bundles to be written to the metadata store.
+        lm1.updateAll();
+
         loadManagerWrapper.writeResourceQuotasToZooKeeper();
 
         MetadataCache<BundleData> bundlesCache = pulsar1.getLocalMetadataStore().getMetadataCache(BundleData.class);
@@ -1163,7 +1170,7 @@ public class ModularLoadManagerImplTest {
         String topicToFindBundle = topicName + 0;
         NamespaceBundle realBundle = pulsar1.getNamespaceService().getBundle(TopicName.get(topicToFindBundle));
         String bundleKey = realBundle.toString();
-        log.info("Before bundle={}", bundleKey);
+        log.info().attr("bundle", bundleKey).log("Before bundle");
 
         NamespaceBundleStats stats = new NamespaceBundleStats();
         stats.msgRateIn = 100000.0;

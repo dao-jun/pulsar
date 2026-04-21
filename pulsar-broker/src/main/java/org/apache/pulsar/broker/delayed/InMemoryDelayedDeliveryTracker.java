@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.delayed;
 
 import com.google.common.annotations.VisibleForTesting;
+import io.github.merlimat.slog.Logger;
 import io.netty.util.Timer;
 import java.time.Clock;
 import java.util.NavigableSet;
@@ -27,15 +28,16 @@ import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 import lombok.Getter;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
 import org.apache.pulsar.broker.service.persistent.AbstractPersistentDispatcherMultipleConsumers;
 import org.apache.pulsar.common.util.collections.LongOpenHashSet;
 import org.roaringbitmap.longlong.Roaring64Bitmap;
 
-@Slf4j
 public class InMemoryDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker {
+
+    private static final Logger LOG = Logger.get(InMemoryDelayedDeliveryTracker.class);
+    protected final Logger log;
 
     // timestamp -> ledgerId -> entryId
     // TreeMap -> TreeMap -> RoaringBitmap
@@ -68,15 +70,25 @@ public class InMemoryDelayedDeliveryTracker extends AbstractDelayedDeliveryTrack
                                    long tickTimeMillis,
                                    boolean isDelayedDeliveryDeliverAtTimeStrict,
                                    long fixedDelayDetectionLookahead) {
-        this(dispatcher, timer, tickTimeMillis, Clock.systemUTC(), isDelayedDeliveryDeliverAtTimeStrict,
-                fixedDelayDetectionLookahead);
+        this(new DispatcherDelayedDeliveryContext(dispatcher), timer, tickTimeMillis, Clock.systemUTC(),
+                isDelayedDeliveryDeliverAtTimeStrict, fixedDelayDetectionLookahead);
     }
 
+    @VisibleForTesting
     public InMemoryDelayedDeliveryTracker(AbstractPersistentDispatcherMultipleConsumers dispatcher, Timer timer,
                                           long tickTimeMillis, Clock clock,
                                           boolean isDelayedDeliveryDeliverAtTimeStrict,
                                           long fixedDelayDetectionLookahead) {
-        super(dispatcher, timer, tickTimeMillis, clock, isDelayedDeliveryDeliverAtTimeStrict);
+        this(new DispatcherDelayedDeliveryContext(dispatcher), timer, tickTimeMillis, clock,
+                isDelayedDeliveryDeliverAtTimeStrict, fixedDelayDetectionLookahead);
+    }
+
+    private InMemoryDelayedDeliveryTracker(DelayedDeliveryContext context, Timer timer,
+                                           long tickTimeMillis, Clock clock,
+                                           boolean isDelayedDeliveryDeliverAtTimeStrict,
+                                           long fixedDelayDetectionLookahead) {
+        super(context, timer, tickTimeMillis, clock, isDelayedDeliveryDeliverAtTimeStrict);
+        this.log = LOG.with().ctx(super.log).build();
         this.fixedDelayDetectionLookahead = fixedDelayDetectionLookahead;
         this.timestampPrecisionBitCnt = calculateTimestampPrecisionBitCnt(tickTimeMillis);
     }
@@ -115,13 +127,12 @@ public class InMemoryDelayedDeliveryTracker extends AbstractDelayedDeliveryTrack
             messagesHaveFixedDelay = false;
             return false;
         }
-
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Add message {}:{} -- Delivery in {} ms ", dispatcher.getName(), ledgerId, entryId,
-                    deliverAt - clock.millis());
-        }
-
-        long timestamp = trimLowerBit(deliverAt, timestampPrecisionBitCnt);
+            log.debug()
+                    .attr("ledgerId", ledgerId)
+                    .attr("entryId", entryId)
+                    .attr("deliveryInMs", () -> deliverAt - clock.millis())
+                    .log("Add message");
+                long timestamp = trimLowerBit(deliverAt, timestampPrecisionBitCnt);
         delayedMessageMap.computeIfAbsent(timestamp, k -> new TreeMap<>())
                 .computeIfAbsent(ledgerId, k -> new Roaring64Bitmap())
                 .add(entryId);
@@ -207,18 +218,17 @@ public class InMemoryDelayedDeliveryTracker extends AbstractDelayedDeliveryTrack
                 delayedMessageMap.remove(timestamp);
             }
         }
-
-        if (log.isDebugEnabled()) {
-            log.debug("[{}] Get scheduled messages - found {}", dispatcher.getName(), positions.size());
-        }
-
-        if (delayedMessageMap.isEmpty()) {
+            log.debug()
+                    .attr("messagesCount", positions.size())
+                    .log("Get scheduled messages");
+                if (delayedMessageMap.isEmpty()) {
             // Reset to initial state
             highestDeliveryTimeTracked = 0;
             messagesHaveFixedDelay = true;
             if (delayedMessagesCount.get() != 0) {
-                log.warn("[{}] Delayed message tracker is empty, but delayedMessagesCount is {}",
-                        dispatcher.getName(), delayedMessagesCount.get());
+                log.warn()
+                        .attr("delayedMessagesCount", delayedMessagesCount.get())
+                        .log("Delayed message tracker is empty, but delayedMessagesCount is non-zero");
             }
         }
 

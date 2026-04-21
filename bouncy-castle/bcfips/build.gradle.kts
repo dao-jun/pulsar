@@ -18,14 +18,14 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 dependencies {
+    implementation(libs.slog)
     compileOnly(project(":pulsar-common")) {
         exclude(group = "io.prometheus", module = "simpleclient_caffeine")
     }
-    compileOnly(libs.slf4j.api)
     implementation(libs.bcutil.fips)
     implementation(libs.bc.fips)
     implementation(libs.bcpkix.fips)

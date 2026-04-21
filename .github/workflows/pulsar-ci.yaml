@@ -134,14 +134,6 @@ jobs:
           github.event_name == 'workflow_dispatch' && github.event.inputs.netty_leak_detection || 'report'
           }}" >> $GITHUB_OUTPUT
 
-      - name: Check if the PR has been approved for testing
-        if: ${{ steps.check_changes.outputs.docs_only != 'true' && github.repository == 'apache/pulsar' && github.event_name == 'pull_request' }}
-        env:
-          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          pulsar-build/pulsar_ci_tool.sh check_ready_to_test
-
   build-and-license-check:
     needs: preconditions
     name: Build and License check
@@ -343,6 +335,7 @@ jobs:
         with:
           name: Unit-${{ matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -356,6 +349,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
             ${{ env.NETTY_LEAK_DUMP_DIR }}/*
             ${{ env.TRACE_TEST_RESOURCE_CLEANUP_DIR }}/*
             ${{ env.THREAD_LEAK_DETECTOR_DIR }}/*
@@ -585,6 +579,7 @@ jobs:
         with:
           name: Integration-${{ matrix.upload_name || matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -598,6 +593,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
           retention-days: 7
           if-no-files-found: ignore
 
@@ -666,25 +662,26 @@ jobs:
           src/check-binary-license.sh ./distribution/server/build/distributions/apache-pulsar-*-bin.tar.gz
           src/check-binary-license.sh ./distribution/shell/build/distributions/apache-pulsar-shell-*-bin.tar.gz
 
-#      - name: Run Trivy container scan
-#        id: trivy_scan
-#        uses: aquasecurity/trivy-action@v0.35.0
-#        if: ${{ github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
-#        continue-on-error: true
-#        with:
-#          image-ref: "apachepulsar/pulsar:latest"
-#          scanners: vuln
-#          severity: CRITICAL,HIGH,MEDIUM,LOW
-#          limit-severities-for-sarif: true
-#          format: 'sarif'
-#          output: 'trivy-results.sarif'
-#
-#      - name: Upload Trivy scan results to GitHub Security tab
-#        uses: github/codeql-action/upload-sarif@v3
-#        if: ${{ steps.trivy_scan.outcome == 'success' && github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
-#        continue-on-error: true
-#        with:
-#          sarif_file: 'trivy-results.sarif'
+      - name: Run Trivy container scan
+        id: trivy_scan
+        uses: lhotari/sandboxed-trivy-action@555963036b2012b44c1071508a236e569db28ebb
+        if: ${{ github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
+        continue-on-error: true
+        with:
+          scan-type: 'image'
+          scan-ref: "apachepulsar/pulsar:latest"
+          scanners: vuln
+          severity: CRITICAL,HIGH,MEDIUM,LOW
+          limit-severities-for-sarif: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v4
+        if: ${{ steps.trivy_scan.outcome == 'success' && github.repository == 'apache/pulsar' && github.event_name != 'pull_request' }}
+        continue-on-error: true
+        with:
+          sarif_file: 'trivy-results.sarif'
 
       - name: Save docker image to file
         run: |
@@ -800,6 +797,7 @@ jobs:
         with:
           name: System-${{ matrix.group }}-test-reports
           path: |
+            test-reports/
             **/build/reports/tests/
           retention-days: 7
           if-no-files-found: ignore
@@ -813,6 +811,7 @@ jobs:
             /tmp/*.hprof
             **/hs_err_*.log
             **/core.*
+            build/threaddumps/
           retention-days: 7
           if-no-files-found: ignore
 
@@ -872,7 +871,7 @@ jobs:
           develocity-access-key: ${{ secrets.DEVELOCITY_ACCESS_KEY }}
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: ${{ env.CODEQL_LANGUAGE }}
 
@@ -880,7 +879,7 @@ jobs:
         run: ./gradlew assemble
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:${{ env.CODEQL_LANGUAGE }}"
 
