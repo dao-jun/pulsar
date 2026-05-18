@@ -122,6 +122,7 @@ import org.apache.bookkeeper.mledger.OffloadedLedgerHandle;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionBound;
 import org.apache.bookkeeper.mledger.PositionFactory;
+import org.apache.bookkeeper.mledger.RandomReader;
 import org.apache.bookkeeper.mledger.WaitingEntryCallBack;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
@@ -190,6 +191,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     // ordered by read position (when cacheEvictionByMarkDeletedPosition=false) or by mark delete position
     // (when cacheEvictionByMarkDeletedPosition=true)
     private final ActiveManagedCursorContainer activeCursors;
+    private final RandomReaders randomReaders;
 
 
     // Ever-increasing counter of entries added
@@ -381,6 +383,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         } else {
             activeCursors = new ManagedCursorContainerImpl();
         }
+        randomReaders = new RandomReaders(this);
         this.factory = factory;
         this.bookKeeper = bookKeeper;
         this.config = config;
@@ -1638,11 +1641,13 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     public synchronized void asyncClose(final CloseCallback callback, final Object ctx) {
         State state = STATE_UPDATER.get(this);
         if (state.isFenced()) {
+            randomReaders.closeAll();
             cancelScheduledTasks();
             factory.close(this);
             callback.closeFailed(new ManagedLedgerFencedException(), ctx);
             return;
         } else if (state == State.Closed) {
+            randomReaders.closeAll();
             log.debug("Ignoring request to close a closed managed ledger");
             callback.closeComplete(ctx);
             return;
@@ -1652,6 +1657,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
         factory.close(this);
         STATE_UPDATER.set(this, State.Closed);
+        randomReaders.closeAll();
         clearPendingAddEntries(new ManagedLedgerAlreadyClosedException("Managed ledger is closed"));
         cancelScheduledTasks();
 
@@ -2330,6 +2336,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     }
 
+    @Override
+    public RandomReader newRandomReader() {
+        return randomReaders.create();
+    }
+
     private void internalReadFromLedger(ReadHandle ledger, OpReadEntry opReadEntry) {
 
         if (opReadEntry.readPosition.compareTo(opReadEntry.maxPosition) > 0) {
@@ -2448,6 +2459,32 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
             entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, readCallback, readOpCount);
         } else {
             entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, opReadEntry, ctx);
+        }
+    }
+
+    protected void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry, ReadEntriesCallback callback,
+                                      Object ctx) {
+        asyncReadEntry(ledger, firstEntry, lastEntry, () -> 0, callback, ctx);
+    }
+
+    void asyncReadEntryForRandomReader(ReadHandle ledger, long firstEntry, long lastEntry,
+                                       ReadEntriesCallback callback, Object ctx) {
+        // Random-reader misses must be admitted to the shared cache for reuse by later positional reads.
+        asyncReadEntry(ledger, firstEntry, lastEntry, () -> 1, callback, ctx);
+    }
+
+    private void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry,
+                                IntSupplier expectedReadCount, ReadEntriesCallback callback, Object ctx) {
+        if (config.getReadEntryTimeoutSeconds() > 0) {
+            // set readOpCount to uniquely validate if ReadEntryCallbackWrapper is already recycled
+            long readOpCount = READ_OP_COUNT_UPDATER.incrementAndGet(this);
+            long createdTime = System.nanoTime();
+            ReadEntryCallbackWrapper readCallback = ReadEntryCallbackWrapper.create(name, ledger.getId(), firstEntry,
+                    callback, readOpCount, createdTime, ctx);
+            lastReadCallback = readCallback;
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, readCallback, readOpCount);
+        } else {
+            entryCache.asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, callback, ctx);
         }
     }
 
@@ -4441,6 +4478,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         log.info().log("Moving to Fenced state");
         State prev = STATE_UPDATER.getAndSet(this, State.Fenced);
         if (prev != State.Fenced) {
+            randomReaders.closeAll();
             clearPendingAddEntries(new ManagedLedgerFencedException("ManagedLedger "
                 + name + " is fenced"));
         }
@@ -4450,6 +4488,7 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         log.info().log("Moving to FencedForDeletion state");
         State prev = STATE_UPDATER.getAndSet(this, State.FencedForDeletion);
         if (prev != State.FencedForDeletion) {
+            randomReaders.closeAll();
             clearPendingAddEntries(new ManagedLedgerFencedException("ManagedLedger "
                 + name + " is fenced"));
         }
@@ -5185,7 +5224,12 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     boolean shouldCacheAddedEntry() {
-        // Avoid caching entries if no cursor has been created
-        return getActiveCursors().shouldCacheAddedEntry();
+        // Random readers are deliberately not active cursors, but still need add-path cache seeding.
+        return getActiveCursors().shouldCacheAddedEntry() || randomReaders.hasActiveReaders();
+    }
+
+    @VisibleForTesting
+    int getActiveRandomReaderCount() {
+        return randomReaders.size();
     }
 }
