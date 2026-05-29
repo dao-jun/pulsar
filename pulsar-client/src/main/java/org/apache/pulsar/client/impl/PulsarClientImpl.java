@@ -64,6 +64,8 @@ import org.apache.pulsar.client.api.ProducerBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.api.Reader;
+import org.apache.pulsar.client.api.RandomReader;
+import org.apache.pulsar.client.api.RandomReaderBuilder;
 import org.apache.pulsar.client.api.ReaderBuilder;
 import org.apache.pulsar.client.api.RegexSubscriptionMode;
 import org.apache.pulsar.client.api.Schema;
@@ -75,6 +77,7 @@ import org.apache.pulsar.client.api.transaction.TransactionBuilder;
 import org.apache.pulsar.client.impl.conf.ClientConfigurationData;
 import org.apache.pulsar.client.impl.conf.ConsumerConfigurationData;
 import org.apache.pulsar.client.impl.conf.ProducerConfigurationData;
+import org.apache.pulsar.client.impl.conf.RandomReaderConfigurationData;
 import org.apache.pulsar.client.impl.conf.ReaderConfigurationData;
 import org.apache.pulsar.client.impl.metrics.InstrumentProvider;
 import org.apache.pulsar.client.impl.metrics.MemoryBufferStats;
@@ -366,6 +369,21 @@ public class PulsarClientImpl implements PulsarClient {
     @Override
     public <T> ReaderBuilder<T> newReader(Schema<T> schema) {
         return new ReaderBuilderImpl<>(this, schema);
+    }
+
+    @Override
+    public RandomReaderBuilder<byte[]> newRandomReader() {
+        return new RandomReaderBuilderImpl<>(this, Schema.BYTES);
+    }
+
+    @Override
+    public <T> RandomReaderBuilder<T> newRandomReader(Schema<T> schema) {
+        return new RandomReaderBuilderImpl<>(this, schema);
+    }
+
+    <T> CompletableFuture<RandomReader<T>> createRandomReaderAsync(RandomReaderConfigurationData<T> conf,
+                                                                    Schema<T> schema) {
+        return RandomReaderImpl.create(this, conf, schema);
     }
 
     /**
@@ -1319,6 +1337,10 @@ public class PulsarClientImpl implements PulsarClient {
 
     public long newRequestId() {
         return requestIdGenerator.getAndIncrement();
+    }
+
+    long newRandomReaderId() {
+        return consumerIdGenerator.getAndIncrement();
     }
 
     public ConnectionPool getCnxPool() {

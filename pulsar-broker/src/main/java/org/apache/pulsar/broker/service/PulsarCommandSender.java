@@ -19,6 +19,7 @@
 package org.apache.pulsar.broker.service;
 
 
+import io.netty.channel.ChannelPromise;
 import io.netty.util.concurrent.Future;
 import java.util.Collection;
 import java.util.List;
@@ -87,6 +88,12 @@ public interface PulsarCommandSender {
                                         int partitionIdx, List<? extends Entry> entries, EntryBatchSizes batchSizes,
                                         EntryBatchIndexesAcks batchIndexesAcks,
                                         RedeliveryTracker redeliveryTracker, long epoch);
+
+    void sendRandomReaderSuccessResponse(long requestId, long randomReaderId, String readerName);
+
+    ChannelPromise sendRandomReadMessages(long randomReaderId, long requestId, String topicName,
+                                          int partitionIdx, List<? extends Entry> entries,
+                                          int numberOfEntries, Runnable afterFinalResponseWriteDone);
 
     void sendTcClientConnectResponse(long requestId, ServerError error, String message);
 
