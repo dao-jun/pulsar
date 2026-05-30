@@ -72,6 +72,7 @@ import org.apache.pulsar.common.api.proto.CommandPong;
 import org.apache.pulsar.common.api.proto.CommandProducer;
 import org.apache.pulsar.common.api.proto.CommandProducerSuccess;
 import org.apache.pulsar.common.api.proto.CommandRandomRead;
+import org.apache.pulsar.common.api.proto.CommandRandomReadEntryResult;
 import org.apache.pulsar.common.api.proto.CommandRandomReadMessage;
 import org.apache.pulsar.common.api.proto.CommandRandomReadResponse;
 import org.apache.pulsar.common.api.proto.CommandRandomReader;
@@ -568,6 +569,11 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
                 break;
             }
 
+            case RANDOM_READ_ENTRY_RESULT:
+                checkArgument(cmd.hasRandomReadEntryResult());
+                handleRandomReadEntryResult(cmd.getRandomReadEntryResult());
+                break;
+
             case RANDOM_READ_RESPONSE:
                 checkArgument(cmd.hasRandomReadResponse());
                 handleRandomReadResponse(cmd.getRandomReadResponse());
@@ -932,6 +938,10 @@ public abstract class PulsarDecoder extends ChannelInboundHandlerAdapter {
     }
 
     protected void handleRandomReadMessage(CommandRandomReadMessage randomReadMessage, ByteBuf headersAndPayload) {
+        throw new UnsupportedOperationException();
+    }
+
+    protected void handleRandomReadEntryResult(CommandRandomReadEntryResult randomReadEntryResult) {
         throw new UnsupportedOperationException();
     }
 

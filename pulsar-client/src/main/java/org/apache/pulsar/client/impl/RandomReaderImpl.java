@@ -34,15 +34,19 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.apache.pulsar.client.api.Message;
 import org.apache.pulsar.client.api.MessageId;
 import org.apache.pulsar.client.api.MessageIdAdv;
+import org.apache.pulsar.client.api.MessageInvisibleReason;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.RandomReadResult;
 import org.apache.pulsar.client.api.RandomReader;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.impl.conf.RandomReaderConfigurationData;
 import org.apache.pulsar.client.impl.schema.AutoConsumeSchema;
 import org.apache.pulsar.client.util.TimedCompletableFuture;
+import org.apache.pulsar.common.api.proto.CommandRandomReadEntryResult;
 import org.apache.pulsar.common.api.proto.CommandRandomReadMessage;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.api.proto.ProtocolVersion;
+import org.apache.pulsar.common.api.proto.RandomReadInvisibleReason;
 import org.apache.pulsar.common.api.proto.SingleMessageMetadata;
 import org.apache.pulsar.common.naming.TopicName;
 import org.apache.pulsar.common.protocol.Commands;
@@ -87,7 +91,7 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
     }
 
     @Override
-    public CompletableFuture<List<Message<T>>> read(MessageId startPosition, int numberOfBatches) {
+    public CompletableFuture<List<RandomReadResult<T>>> read(MessageId startPosition, int numberOfBatches) {
         if (!isOpen()) {
             return FutureUtil.failedFuture(new PulsarClientException.AlreadyClosedException(
                     "RandomReader is not ready or already closed"));
@@ -96,7 +100,12 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             return FutureUtil.failedFuture(new PulsarClientException.InvalidConfigurationException(
                     "numberOfBatches must be positive"));
         }
-        MessageIdAdv messageId = unwrapAndValidate(startPosition);
+        MessageIdAdv messageId;
+        try {
+            messageId = unwrapAndValidate(startPosition);
+        } catch (RuntimeException e) {
+            return FutureUtil.failedFuture(e);
+        }
         return getSession(messageId.getPartitionIndex())
                 .thenCompose(session -> session.read(messageId, numberOfBatches));
     }
@@ -302,8 +311,8 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             connectionHandler.connectionClosed(cnx, initialDelay, hostUrl);
         }
 
-        CompletableFuture<List<Message<T>>> read(MessageIdAdv startPosition, int numberOfBatches) {
-            CompletableFuture<List<Message<T>>> future = new CompletableFuture<>();
+        CompletableFuture<List<RandomReadResult<T>>> read(MessageIdAdv startPosition, int numberOfBatches) {
+            CompletableFuture<List<RandomReadResult<T>>> future = new CompletableFuture<>();
             long deadline = System.currentTimeMillis()
                     + parent.client.getConfiguration().getOperationTimeoutMs();
             doRead(startPosition, numberOfBatches, future, deadline, newBackoff());
@@ -311,7 +320,8 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
         }
 
         private void doRead(MessageIdAdv startPosition, int numberOfBatches,
-                            CompletableFuture<List<Message<T>>> resultFuture, long deadline, Backoff readBackoff) {
+                            CompletableFuture<List<RandomReadResult<T>>> resultFuture, long deadline,
+                            Backoff readBackoff) {
             if (isTerminalState()) {
                 resultFuture.completeExceptionally(
                         new PulsarClientException.AlreadyClosedException("RandomReader session is closed"));
@@ -352,6 +362,7 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
                     resultFuture.complete(result);
                     return;
                 }
+                pending.releaseVisibleMessages();
                 if (!isRetriableForRead(ex) || System.currentTimeMillis() > deadline) {
                     resultFuture.completeExceptionally(ex);
                     return;
@@ -374,15 +385,34 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
 
         void messageReceived(CommandRandomReadMessage command, ByteBuf headersAndPayload, ClientCnx cnx) {
             PendingRandomRead<T> pending = pendingRead.get();
-            if (pending != null) {
+            if (pending != null && pending.requestId == command.getRequestId()) {
                 pending.messageReceived(command, headersAndPayload, cnx);
             }
         }
 
-        void completePendingRead() {
+        void entryResultReceived(CommandRandomReadEntryResult command) {
             PendingRandomRead<T> pending = pendingRead.get();
-            if (pending != null) {
+            if (pending != null && pending.requestId == command.getRequestId()) {
+                pending.entryResultReceived(command);
+            }
+        }
+
+        boolean hasPendingRead(long requestId) {
+            PendingRandomRead<T> pending = pendingRead.get();
+            return pending != null && pending.requestId == requestId;
+        }
+
+        void completePendingRead(long requestId) {
+            PendingRandomRead<T> pending = pendingRead.get();
+            if (pending != null && pending.requestId == requestId) {
                 pending.complete();
+            }
+        }
+
+        void failPendingRead(long requestId, Throwable cause) {
+            PendingRandomRead<T> pending = pendingRead.get();
+            if (pending != null && pending.requestId == requestId) {
+                pending.fail(cause);
             }
         }
 
@@ -417,8 +447,8 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
         private final MessageIdAdv startPosition;
         private final int numberOfBatches;
         final RandomReaderSession<T> session;
-        private final TimedCompletableFuture<List<Message<T>>> future = new TimedCompletableFuture<>();
-        private final List<Message<T>> messages = new ArrayList<>();
+        private final TimedCompletableFuture<List<RandomReadResult<T>>> future = new TimedCompletableFuture<>();
+        private final List<RandomReadResult<T>> results = new ArrayList<>();
         volatile long requestId;
 
         PendingRandomRead(MessageIdAdv startPosition, int numberOfBatches,
@@ -431,25 +461,72 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             });
         }
 
-        TimedCompletableFuture<List<Message<T>>> getFuture() {
+        TimedCompletableFuture<List<RandomReadResult<T>>> getFuture() {
             return future;
         }
 
         void complete() {
-            future.complete(List.copyOf(messages));
+            future.complete(List.copyOf(results));
         }
 
         void fail(Throwable cause) {
             future.completeExceptionally(cause);
         }
 
+        void releaseVisibleMessages() {
+            for (RandomReadResult<T> result : results) {
+                if (!result.isVisible()) {
+                    continue;
+                }
+                try {
+                    result.getMessages().forEach(Message::release);
+                } catch (PulsarClientException.MessageInvisibleException ignored) {
+                    // Guarded by isVisible().
+                }
+            }
+            results.clear();
+        }
+
         void messageReceived(CommandRandomReadMessage command, ByteBuf headersAndPayload, ClientCnx cnx) {
             try {
                 List<Message<T>> decoded = decodeEntry(command, headersAndPayload, session.parent.schema(),
                         session.parent.conf(), session.sessionTopic, session.partitionIndex);
-                messages.addAll(decoded);
+                results.add(RandomReadResultImpl.visible(toMessageId(command.getMessageId(),
+                        session.partitionIndex), decoded));
             } catch (PulsarClientException e) {
                 session.failPendingRead(e);
+            }
+        }
+
+        void entryResultReceived(CommandRandomReadEntryResult command) {
+            results.add(RandomReadResultImpl.invisible(toMessageId(command.getMessageId(), session.partitionIndex),
+                    toClientReason(command.getInvisibleReason())));
+        }
+
+        private static MessageIdImpl toMessageId(org.apache.pulsar.common.api.proto.MessageIdData messageId,
+                                                 int fallbackPartition) {
+            int partition = messageId.hasPartition() ? messageId.getPartition() : fallbackPartition;
+            return new MessageIdImpl(messageId.getLedgerId(), messageId.getEntryId(), partition);
+        }
+
+        private static MessageInvisibleReason toClientReason(RandomReadInvisibleReason reason) {
+            if (reason == null) {
+                return MessageInvisibleReason.UNKNOWN;
+            }
+            switch (reason) {
+                case SERVER_ONLY_MARKER:
+                    return MessageInvisibleReason.SERVER_ONLY_MARKER;
+                case TRANSACTION_MARKER:
+                    return MessageInvisibleReason.TRANSACTION_MARKER;
+                case ABORTED_TRANSACTION:
+                    return MessageInvisibleReason.ABORTED_TRANSACTION;
+                case DELAYED_DELIVERY:
+                    return MessageInvisibleReason.DELAYED_DELIVERY;
+                case EXCEEDED_MAX_VISIBLE_POSITION:
+                    return MessageInvisibleReason.EXCEEDED_MAX_VISIBLE_POSITION;
+                case UNKNOWN:
+                default:
+                    return MessageInvisibleReason.UNKNOWN;
             }
         }
 
@@ -460,7 +537,6 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             headersAndPayload.markReaderIndex();
             Commands.skipChecksumIfPresent(headersAndPayload);
             MessageMetadata msgMetadata = Commands.parseMessageMetadata(headersAndPayload);
-            Commands.parseBrokerEntryMetadataIfExist(headersAndPayload);
 
             MessageIdImpl entryMsgId = new MessageIdImpl(command.getMessageId().getLedgerId(),
                     command.getMessageId().getEntryId(), partitionIndex);

@@ -88,6 +88,7 @@ import org.apache.pulsar.common.api.proto.CommandMessage;
 import org.apache.pulsar.common.api.proto.CommandNewTxnResponse;
 import org.apache.pulsar.common.api.proto.CommandPartitionedTopicMetadataResponse;
 import org.apache.pulsar.common.api.proto.CommandProducerSuccess;
+import org.apache.pulsar.common.api.proto.CommandRandomReadEntryResult;
 import org.apache.pulsar.common.api.proto.CommandRandomReadMessage;
 import org.apache.pulsar.common.api.proto.CommandRandomReadResponse;
 import org.apache.pulsar.common.api.proto.CommandRandomReaderSuccess;
@@ -1649,16 +1650,29 @@ public class ClientCnx extends PulsarHandler {
     }
 
     @Override
+    protected void handleRandomReadEntryResult(CommandRandomReadEntryResult command) {
+        RandomReaderImpl.RandomReaderSession<?> session = randomReaders.get(command.getRandomReaderId());
+        if (session != null) {
+            session.entryResultReceived(command);
+        }
+    }
+
+    @Override
     protected void handleRandomReadResponse(CommandRandomReadResponse response) {
+        long requestId = response.getRequestId();
         RandomReaderImpl.RandomReaderSession<?> session = randomReaders.get(response.getRandomReaderId());
-        if (session == null) {
+        if (session == null || !session.hasPendingRead(requestId)) {
             return;
         }
+        TimedCompletableFuture<?> requestFuture = pendingRequests.remove(requestId);
+        if (requestFuture != null) {
+            requestFuture.markAsResponded();
+        }
         if (response.hasError()) {
-            session.failPendingRead(
+            session.failPendingRead(response.getRequestId(),
                     getPulsarClientException(response.getError(), response.getMessage()));
         } else {
-            session.completePendingRead();
+            session.completePendingRead(response.getRequestId());
         }
     }
 

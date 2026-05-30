@@ -27,6 +27,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.pulsar.broker.service.BrokerRandomReader.EntryResult;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.common.api.proto.CommandLookupTopicResponse;
 import org.apache.pulsar.common.api.proto.CommandTopicMigrated.ResourceType;
@@ -92,7 +93,7 @@ public interface PulsarCommandSender {
     void sendRandomReaderSuccessResponse(long requestId, long randomReaderId, String readerName);
 
     ChannelPromise sendRandomReadMessages(long randomReaderId, long requestId, String topicName,
-                                          int partitionIdx, List<? extends Entry> entries,
+                                          int partitionIdx, List<EntryResult> results,
                                           int numberOfEntries, Runnable afterFinalResponseWriteDone);
 
     void sendTcClientConnectResponse(long requestId, ServerError error, String message);

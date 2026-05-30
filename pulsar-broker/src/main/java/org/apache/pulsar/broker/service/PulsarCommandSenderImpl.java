@@ -31,6 +31,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.function.Function;
 import lombok.CustomLog;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.pulsar.broker.service.BrokerRandomReader.EntryResult;
 import org.apache.pulsar.broker.intercept.BrokerInterceptor;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.common.api.proto.BaseCommand;
@@ -332,16 +333,21 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
 
     @Override
     public ChannelPromise sendRandomReadMessages(long randomReaderId, long requestId, String topicName,
-                                                 int partitionIdx, List<? extends Entry> entries,
+                                                 int partitionIdx, List<EntryResult> results,
                                                  int numberOfEntries,
                                                  Runnable afterFinalResponseWriteDone) {
         final ChannelHandlerContext ctx = cnx.ctx();
         final ChannelPromise writePromise = ctx.newPromise();
         ctx.channel().eventLoop().execute(() -> {
-            List<Entry> entriesToRelease = new ArrayList<>(entries.size());
             try {
-                for (Entry entry : entries) {
+                for (EntryResult result : results) {
+                    Entry entry = result.entry();
                     if (entry == null) {
+                        continue;
+                    }
+                    if (!result.isVisible()) {
+                        ctx.write(Commands.newRandomReadEntryResult(randomReaderId, requestId, entry.getLedgerId(),
+                                entry.getEntryId(), partitionIdx, result.invisibleReason()), ctx.voidPromise());
                         continue;
                     }
 
@@ -358,7 +364,6 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
 
                     ctx.write(Commands.newRandomReadMessage(randomReaderId, requestId, entry.getLedgerId(),
                             entry.getEntryId(), partitionIdx, metadataAndPayload), ctx.voidPromise());
-                    entriesToRelease.add(entry);
                 }
 
                 ctx.writeAndFlush(Commands.newRandomReadResponse(randomReaderId, requestId, numberOfEntries,
@@ -367,7 +372,7 @@ public class PulsarCommandSenderImpl implements PulsarCommandSender {
                 writePromise.setFailure(t);
             }
             writePromise.addListener(future -> {
-                entriesToRelease.forEach(Entry::release);
+                results.forEach(EntryResult::release);
                 afterFinalResponseWriteDone.run();
             });
         });

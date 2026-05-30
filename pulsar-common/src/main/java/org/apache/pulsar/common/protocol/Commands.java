@@ -86,6 +86,7 @@ import org.apache.pulsar.common.api.proto.CommandPartitionedTopicMetadataRespons
 import org.apache.pulsar.common.api.proto.CommandProducer;
 import org.apache.pulsar.common.api.proto.CommandProducerSuccess;
 import org.apache.pulsar.common.api.proto.CommandRandomRead;
+import org.apache.pulsar.common.api.proto.CommandRandomReadEntryResult;
 import org.apache.pulsar.common.api.proto.CommandRandomReadMessage;
 import org.apache.pulsar.common.api.proto.CommandRandomReadResponse;
 import org.apache.pulsar.common.api.proto.CommandRandomReader;
@@ -110,6 +111,7 @@ import org.apache.pulsar.common.api.proto.KeyValue;
 import org.apache.pulsar.common.api.proto.MessageIdData;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
 import org.apache.pulsar.common.api.proto.ProtocolVersion;
+import org.apache.pulsar.common.api.proto.RandomReadInvisibleReason;
 import org.apache.pulsar.common.api.proto.ScalableConsumerAssignment;
 import org.apache.pulsar.common.api.proto.ScalableConsumerType;
 import org.apache.pulsar.common.api.proto.ScalableTopicDAG;
@@ -2485,6 +2487,30 @@ public class Commands {
         return serializeCommandMessageWithSize(
                 newRandomReadMessageCommand(randomReaderId, requestId, ledgerId, entryId, partition),
                 metadataAndPayload);
+    }
+
+    public static BaseCommand newRandomReadEntryResultCommand(long randomReaderId, long requestId, long ledgerId,
+                                                              long entryId, int partition,
+                                                              RandomReadInvisibleReason invisibleReason) {
+        BaseCommand cmd = localCmd(Type.RANDOM_READ_ENTRY_RESULT);
+        CommandRandomReadEntryResult result = cmd.setRandomReadEntryResult()
+                .setRandomReaderId(randomReaderId)
+                .setRequestId(requestId)
+                .setInvisibleReason(invisibleReason);
+        result.setMessageId()
+                .setLedgerId(ledgerId)
+                .setEntryId(entryId);
+        if (partition >= 0) {
+            result.getMessageId().setPartition(partition);
+        }
+        return cmd;
+    }
+
+    public static ByteBuf newRandomReadEntryResult(long randomReaderId, long requestId, long ledgerId,
+                                                   long entryId, int partition,
+                                                   RandomReadInvisibleReason invisibleReason) {
+        return serializeWithSize(newRandomReadEntryResultCommand(randomReaderId, requestId, ledgerId,
+                entryId, partition, invisibleReason));
     }
 
     public static ByteBuf newRandomReadResponse(long randomReaderId, long requestId, int numberOfEntries,

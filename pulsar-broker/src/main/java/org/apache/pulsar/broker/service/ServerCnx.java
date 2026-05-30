@@ -2968,22 +2968,18 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
             }
             Position startPosition = PositionFactory.create(start.getLedgerId(), start.getEntryId());
             topic.checkIfTransactionBufferRecoverCompletely()
-                    .thenCompose(ignored -> topic.getLastDispatchablePosition())
-                    .thenCompose(maxVisible -> {
-                        if (startPosition.compareTo(maxVisible) > 0) {
-                            return CompletableFuture.completedFuture(List.of());
-                        }
-                        return reader.readEntries(startPosition, numberOfEntries, maxVisible,
-                                service.getPulsar().getConfiguration().getDispatcherMaxReadBatchSize());
-                    })
-                    .thenAccept(entries -> commandSender.sendRandomReadMessages(randomReaderId, requestId,
-                            topic.getName(), partitionIndex, entries, entries.size(),
-                            () -> reader.endRead(requestId))
-                            .addListener(future -> {
-                                if (!future.isSuccess()) {
-                                    reader.endRead(requestId);
-                                }
-                            }))
+                    .thenApply(ignored ->
+                            reader.isReadCommitted() ? topic.getMaxReadPosition() : PositionFactory.LATEST
+                    )
+                    .thenCompose(maxVisible -> reader.readEntries(startPosition, numberOfEntries, maxVisible))
+                    .thenAccept(entries ->
+                            commandSender.sendRandomReadMessages(randomReaderId, requestId, topic.getName(),
+                                            partitionIndex, entries, entries.size(), () -> reader.endRead(requestId))
+                                    .addListener(future -> {
+                                        if (!future.isSuccess()) {
+                                            reader.endRead(requestId);
+                                        }
+                                    }))
                     .exceptionally(ex -> {
                         Throwable cause = FutureUtil.unwrapCompletionException(ex);
                         writeAndFlush(Commands.newRandomReadResponse(randomReaderId, requestId, 0,

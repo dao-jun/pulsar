@@ -25,12 +25,14 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import lombok.Getter;
 import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.pulsar.broker.service.persistent.PersistentTopic;
 import org.apache.pulsar.client.api.transaction.TxnID;
 import org.apache.pulsar.common.api.proto.MessageMetadata;
+import org.apache.pulsar.common.api.proto.RandomReadInvisibleReason;
 import org.apache.pulsar.common.api.proto.ServerError;
 import org.apache.pulsar.common.protocol.Commands;
 import org.apache.pulsar.common.protocol.Markers;
@@ -44,6 +46,8 @@ public class BrokerRandomReader implements AutoCloseable {
     private final ServerCnx owner;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicLong inFlightRequestId = new AtomicLong(-1L);
+
+    @Getter
     private final boolean readCommitted;
 
     public BrokerRandomReader(long randomReaderId, String readerName, Map<String, String> metadata,
@@ -101,28 +105,13 @@ public class BrokerRandomReader implements AutoCloseable {
         closed.set(true);
     }
 
-    public CompletableFuture<List<Entry>> readEntries(Position start, int needed,
-                                                      Position maxVisible, int maxTotalEntries) {
-        if (needed <= 0 || maxTotalEntries <= 0 || start.compareTo(maxVisible) > 0) {
+    public CompletableFuture<List<EntryResult>> readEntries(Position start, int numberOfEntries,
+                                                            Position maxVisible) {
+        if (numberOfEntries <= 0) {
             return CompletableFuture.completedFuture(List.of());
         }
-        int batchSize = Math.min(needed, maxTotalEntries);
-        return topic.getManagedLedger().readEntries(start, batchSize).
-                thenCompose(entries -> {
-                    List<Entry> visible = filterEntries(entries, maxVisible);
-                    if (entries.size() < batchSize || visible.size() >= needed) {
-                        return CompletableFuture.completedFuture(visible);
-                    }
-                    Position next = entries.get(entries.size() - 1).getPosition().getNext();
-                    return readEntries(next, needed - visible.size(), maxVisible,
-                            maxTotalEntries - entries.size())
-                            .thenApply(more -> {
-                                List<Entry> all = new ArrayList<>(visible.size() + more.size());
-                                all.addAll(visible);
-                                all.addAll(more);
-                                return all;
-                            });
-                });
+        return topic.getManagedLedger().readEntries(start, numberOfEntries)
+                .thenApply(entries -> toEntryResults(entries, maxVisible));
     }
 
     public CompletableFuture<Void> disconnect(String brokerServiceUrl, String brokerServiceUrlTls) {
@@ -131,15 +120,17 @@ public class BrokerRandomReader implements AutoCloseable {
         return CompletableFuture.completedFuture(null);
     }
 
-    private List<Entry> filterEntries(List<Entry> entries, Position maxVisiblePosition) {
-        List<Entry> result = new ArrayList<>(entries.size());
-        for (Entry entry : entries) {
+    private List<EntryResult> toEntryResults(List<Entry> entries, Position maxVisiblePosition) {
+        List<EntryResult> result = new ArrayList<>(entries.size());
+        for (int i = 0; i < entries.size(); i++) {
+            Entry entry = entries.get(i);
             if (entry == null) {
                 continue;
             }
             try {
-                if (entry.getPosition().compareTo(maxVisiblePosition) > 0) {
-                    entry.release();
+                Position position = entry.getPosition();
+                if (position.compareTo(maxVisiblePosition) > 0) {
+                    result.add(EntryResult.invisible(entry, RandomReadInvisibleReason.EXCEEDED_MAX_VISIBLE_POSITION));
                     continue;
                 }
                 ByteBuf metadataAndPayload = entry.getDataBuffer();
@@ -148,29 +139,52 @@ public class BrokerRandomReader implements AutoCloseable {
                         metadataAndPayload, topic.getName(), -1);
                 metadataAndPayload.readerIndex(readerIndex);
                 if (metadata == null) {
-                    entry.release();
                     throw new BrokerServiceException.PersistenceException(
-                            "Failed to parse message metadata at " + entry.getPosition());
+                            "Failed to parse message metadata at " + position);
                 }
-                if (Markers.isServerOnlyMarker(metadata) || Markers.isTxnMarker(metadata)) {
-                    entry.release();
+                if (Markers.isTxnMarker(metadata)) {
+                    result.add(EntryResult.invisible(entry, RandomReadInvisibleReason.TRANSACTION_MARKER));
+                    continue;
+                }
+                if (Markers.isServerOnlyMarker(metadata)) {
+                    result.add(EntryResult.invisible(entry, RandomReadInvisibleReason.SERVER_ONLY_MARKER));
                     continue;
                 }
                 if (readCommitted && metadata.hasTxnidMostBits() && metadata.hasTxnidLeastBits()
                         && topic.isTxnAborted(new TxnID(metadata.getTxnidMostBits(),
-                        metadata.getTxnidLeastBits()), entry.getPosition())) {
-                    entry.release();
+                        metadata.getTxnidLeastBits()), position)) {
+                    result.add(EntryResult.invisible(entry, RandomReadInvisibleReason.ABORTED_TRANSACTION));
                     continue;
                 }
-                result.add(entry);
-            } catch (BrokerServiceException.PersistenceException e) {
-                throw FutureUtil.wrapToCompletionException(e);
+                if (topic.isDelayedDeliveryEnabled()
+                        && metadata.hasDeliverAtTime()
+                        && metadata.getDeliverAtTime() > System.currentTimeMillis()) {
+                    result.add(EntryResult.invisible(entry, RandomReadInvisibleReason.DELAYED_DELIVERY));
+                    continue;
+                }
+                result.add(EntryResult.visible(entry));
             } catch (Throwable t) {
                 entry.release();
+                releaseResults(result);
+                releaseEntries(entries.subList(i + 1, entries.size()));
                 throw FutureUtil.wrapToCompletionException(t);
             }
         }
         return result;
+    }
+
+    private static void releaseResults(List<EntryResult> results) {
+        for (EntryResult result : results) {
+            result.release();
+        }
+    }
+
+    private static void releaseEntries(List<Entry> entries) {
+        for (Entry entry : entries) {
+            if (entry != null) {
+                entry.release();
+            }
+        }
     }
 
     public static ServerError toServerError(Throwable cause) {
@@ -193,5 +207,39 @@ public class BrokerRandomReader implements AutoCloseable {
             return ServerError.PersistenceError;
         }
         return BrokerServiceException.getClientErrorCode(cause);
+    }
+
+    public static final class EntryResult {
+        private final Entry entry;
+        private final RandomReadInvisibleReason invisibleReason;
+
+        private EntryResult(Entry entry, RandomReadInvisibleReason invisibleReason) {
+            this.entry = entry;
+            this.invisibleReason = invisibleReason;
+        }
+
+        public static EntryResult visible(Entry entry) {
+            return new EntryResult(entry, null);
+        }
+
+        public static EntryResult invisible(Entry entry, RandomReadInvisibleReason invisibleReason) {
+            return new EntryResult(entry, invisibleReason);
+        }
+
+        public Entry entry() {
+            return entry;
+        }
+
+        public boolean isVisible() {
+            return invisibleReason == null;
+        }
+
+        public RandomReadInvisibleReason invisibleReason() {
+            return invisibleReason;
+        }
+
+        public void release() {
+            entry.release();
+        }
     }
 }

@@ -676,6 +676,22 @@ message CommandRandomReadMessage {
     required MessageIdData message_id = 3;
 }
 
+enum RandomReadInvisibleReason {
+    UNKNOWN = 0;
+    SERVER_ONLY_MARKER = 1;
+    TRANSACTION_MARKER = 2;
+    ABORTED_TRANSACTION = 3;
+    DELAYED_DELIVERY = 4;
+    EXCEEDED_MAX_VISIBLE_POSITION = 5;
+}
+
+message CommandRandomReadEntryResult {
+    required uint64 random_reader_id = 1;
+    required uint64 request_id = 2;
+    required MessageIdData message_id = 3;
+    required RandomReadInvisibleReason invisible_reason = 4;
+}
+
 message CommandRandomReadResponse {
     required uint64 random_reader_id = 1;
     required uint64 request_id = 2;
@@ -1313,6 +1329,7 @@ message BaseCommand {
         RANDOM_READ_MESSAGE                   = 82;
         RANDOM_READ_RESPONSE                  = 83;
         CLOSE_RANDOM_READER                   = 84;
+        RANDOM_READ_ENTRY_RESULT              = 85;
     }
 
 
@@ -1415,4 +1432,5 @@ message BaseCommand {
     optional CommandRandomReadMessage randomReadMessage = 82;
     optional CommandRandomReadResponse randomReadResponse = 83;
     optional CommandCloseRandomReader closeRandomReader = 84;
+    optional CommandRandomReadEntryResult randomReadEntryResult = 85;
 }
