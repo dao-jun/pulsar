@@ -383,7 +383,8 @@ public class PulsarClientImpl implements PulsarClient {
 
     <T> CompletableFuture<RandomReader<T>> createRandomReaderAsync(RandomReaderConfigurationData<T> conf,
                                                                     Schema<T> schema) {
-        return RandomReaderImpl.create(this, conf, schema);
+        return preProcessSchemaBeforeSubscribe(this, schema, conf.getTopicName())
+                .thenCompose(schemaClone -> RandomReaderImpl.create(this, conf, schemaClone));
     }
 
     /**
