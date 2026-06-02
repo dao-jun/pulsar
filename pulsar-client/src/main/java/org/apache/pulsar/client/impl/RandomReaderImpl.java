@@ -350,13 +350,14 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             ByteBuf command = Commands.newRandomRead(randomReaderId, requestId,
                     pending.startPosition.getLedgerId(), pending.startPosition.getEntryId(),
                     partitionIndex, pending.numberOfBatches);
+            current.registerPendingReadTimeout(requestId, pending.getFuture());
             current.ctx().writeAndFlush(command).addListener(writeFuture -> {
                 if (!writeFuture.isSuccess()) {
-                    failPendingRead(writeFuture.cause());
+                    failPendingRead(requestId, writeFuture.cause());
                 }
             });
-            current.registerPendingReadTimeout(requestId, pending.getFuture());
             pending.future.whenComplete((result, ex) -> {
+                current.removePendingReadTimeout(requestId, pending.getFuture());
                 if (ex == null) {
                     readBackoff.reset();
                     resultFuture.complete(result);
@@ -402,10 +403,10 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             return pending != null && pending.requestId == requestId;
         }
 
-        void completePendingRead(long requestId) {
+        void completePendingRead(long requestId, int expectedResultCount) {
             PendingRandomRead<T> pending = pendingRead.get();
             if (pending != null && pending.requestId == requestId) {
-                pending.complete();
+                pending.complete(expectedResultCount);
             }
         }
 
@@ -465,7 +466,14 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             return future;
         }
 
-        void complete() {
+        void complete(int expectedResultCount) {
+            if (results.size() != expectedResultCount) {
+                future.completeExceptionally(new PulsarClientException.InvalidMessageException(
+                        "RandomReader response result count mismatch for request " + requestId
+                                + ": expected " + expectedResultCount + " entries but received "
+                                + results.size()));
+                return;
+            }
             future.complete(List.copyOf(results));
         }
 
@@ -493,9 +501,18 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
                         session.parent.conf(), session.sessionTopic, session.partitionIndex);
                 results.add(RandomReadResultImpl.visible(toMessageId(command.getMessageId(),
                         session.partitionIndex), decoded));
-            } catch (PulsarClientException e) {
-                session.failPendingRead(e);
+            } catch (Exception e) {
+                session.failPendingRead(command.getRequestId(), toInvalidMessageException(e));
             }
+        }
+
+        private static PulsarClientException toInvalidMessageException(Exception e) {
+            if (e instanceof PulsarClientException.InvalidMessageException invalidMessageException) {
+                return invalidMessageException;
+            }
+            String message = e.getMessage();
+            return new PulsarClientException.InvalidMessageException(
+                    "Failed to decode random read entry" + (message == null ? "" : ": " + message));
         }
 
         void entryResultReceived(CommandRandomReadEntryResult command) {
@@ -544,35 +561,40 @@ public class RandomReaderImpl<T> extends HandlerState implements RandomReader<T>
             int numMessages = msgMetadata.getNumMessagesInBatch();
             List<Message<T>> result = new ArrayList<>(Math.max(numMessages, 1));
 
-            if (numMessages == 1 && !msgMetadata.hasNumMessagesInBatch()) {
-                MessageImpl<T> message = MessageImpl.create(topicName, entryMsgId,
-                        msgMetadata, headersAndPayload, Optional.empty(), null, schema,
-                        0, conf.isPoolMessages(), Commands.DEFAULT_CONSUMER_EPOCH);
-                result.add(message);
-            } else {
-                for (int i = 0; i < numMessages; i++) {
-                    SingleMessageMetadata singleMetadata = new SingleMessageMetadata();
-                    ByteBuf singlePayload;
-                    try {
-                        singlePayload = Commands.deSerializeSingleMessageInBatch(
-                                headersAndPayload, singleMetadata, i, numMessages);
-                    } catch (IOException e) {
-                        throw new PulsarClientException(e);
-                    }
-                    try {
-                        BatchMessageIdImpl batchMsgId = new BatchMessageIdImpl(
-                                command.getMessageId().getLedgerId(),
-                                command.getMessageId().getEntryId(),
-                                partitionIndex, i, numMessages, null);
-                        MessageImpl<T> message = MessageImpl.create(topicName, batchMsgId,
-                                msgMetadata, singleMetadata, singlePayload,
-                                Optional.empty(), null, schema, 0,
-                                conf.isPoolMessages(), Commands.DEFAULT_CONSUMER_EPOCH);
-                        result.add(message);
-                    } finally {
-                        singlePayload.release();
+            try {
+                if (numMessages == 1 && !msgMetadata.hasNumMessagesInBatch()) {
+                    MessageImpl<T> message = MessageImpl.create(topicName, entryMsgId,
+                            msgMetadata, headersAndPayload, Optional.empty(), null, schema,
+                            0, conf.isPoolMessages(), Commands.DEFAULT_CONSUMER_EPOCH);
+                    result.add(message);
+                } else {
+                    for (int i = 0; i < numMessages; i++) {
+                        SingleMessageMetadata singleMetadata = new SingleMessageMetadata();
+                        ByteBuf singlePayload;
+                        try {
+                            singlePayload = Commands.deSerializeSingleMessageInBatch(
+                                    headersAndPayload, singleMetadata, i, numMessages);
+                        } catch (IOException e) {
+                            throw new PulsarClientException(e);
+                        }
+                        try {
+                            BatchMessageIdImpl batchMsgId = new BatchMessageIdImpl(
+                                    command.getMessageId().getLedgerId(),
+                                    command.getMessageId().getEntryId(),
+                                    partitionIndex, i, numMessages, null);
+                            MessageImpl<T> message = MessageImpl.create(topicName, batchMsgId,
+                                    msgMetadata, singleMetadata, singlePayload,
+                                    Optional.empty(), null, schema, 0,
+                                    conf.isPoolMessages(), Commands.DEFAULT_CONSUMER_EPOCH);
+                            result.add(message);
+                        } finally {
+                            singlePayload.release();
+                        }
                     }
                 }
+            } catch (PulsarClientException | RuntimeException | Error e) {
+                result.forEach(Message::release);
+                throw e;
             }
             return result;
         }

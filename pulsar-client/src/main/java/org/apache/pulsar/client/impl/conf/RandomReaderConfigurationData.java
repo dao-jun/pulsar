@@ -41,7 +41,9 @@ public class RandomReaderConfigurationData<T> implements Serializable, Cloneable
     @SuppressWarnings("unchecked")
     public RandomReaderConfigurationData<T> clone() {
         try {
-            return (RandomReaderConfigurationData<T>) super.clone();
+            RandomReaderConfigurationData<T> clone = (RandomReaderConfigurationData<T>) super.clone();
+            clone.properties = new TreeMap<>(properties);
+            return clone;
         } catch (CloneNotSupportedException e) {
             throw new RuntimeException("Failed to clone RandomReaderConfigurationData", e);
         }

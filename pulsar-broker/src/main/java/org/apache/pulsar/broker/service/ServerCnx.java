@@ -2815,6 +2815,9 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
         long requestId = command.getRequestId();
         long randomReaderId = command.getRandomReaderId();
         String topic = command.getTopic();
+        String readerName = command.hasReaderName() ? command.getReaderName() : "";
+        SchemaData schema = command.hasSchema() ? getSchema(command.getSchema()) : null;
+        boolean readCommitted = command.hasReadCommitted() && command.isReadCommitted();
         Map<String, String> metadata = CommandUtils.metadataFromCommand(command);
 
         CompletableFuture<BrokerRandomReader> future = new CompletableFuture<>();
@@ -2858,7 +2861,6 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                     return BrokerRandomReader.validatePersistentTopic(resolved);
                 })
                 .thenCompose(persistentTopic -> {
-                    SchemaData schema = command.hasSchema() ? getSchema(command.getSchema()) : null;
                     CompletableFuture<Void> schemaFuture = schema != null
                             && schema.getType() != SchemaType.AUTO_CONSUME
                             ? persistentTopic.addSchemaIfIdleOrCheckCompatible(schema)
@@ -2867,9 +2869,7 @@ public class ServerCnx extends PulsarHandler implements TransportCnx {
                 })
                 .thenAcceptAsync(persistentTopic -> {
                     BrokerRandomReader reader = new BrokerRandomReader(randomReaderId,
-                            command.hasReaderName() ? command.getReaderName() : "",
-                            metadata, persistentTopic, this,
-                            command.hasReadCommitted() && command.isReadCommitted());
+                            readerName, metadata, persistentTopic, this, readCommitted);
                     if (randomReaders.get(randomReaderId) != future || future.isDone()) {
                         reader.close();
                         return;

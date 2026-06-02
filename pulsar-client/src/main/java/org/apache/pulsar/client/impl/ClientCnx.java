@@ -1624,6 +1624,10 @@ public class ClientCnx extends PulsarHandler {
         requestTimeoutQueue.add(new RequestTime(requestId, RequestType.RandomRead));
     }
 
+    void removePendingReadTimeout(long requestId, TimedCompletableFuture<?> future) {
+        pendingRequests.remove(requestId, future);
+    }
+
     CompletableFuture<CommandRandomReaderSuccess> sendRandomReaderCreate(ByteBuf command, long requestId) {
         TimedCompletableFuture<CommandRandomReaderSuccess> future = new TimedCompletableFuture<>();
         sendRequestAndHandleTimeout(command, requestId, RequestType.RandomReaderCreate, true, future);
@@ -1672,7 +1676,7 @@ public class ClientCnx extends PulsarHandler {
             session.failPendingRead(response.getRequestId(),
                     getPulsarClientException(response.getError(), response.getMessage()));
         } else {
-            session.completePendingRead(response.getRequestId());
+            session.completePendingRead(response.getRequestId(), response.getNumberOfEntries());
         }
     }
 
