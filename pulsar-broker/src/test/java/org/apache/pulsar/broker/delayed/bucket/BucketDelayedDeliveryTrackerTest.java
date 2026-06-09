@@ -45,8 +45,10 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import org.apache.bookkeeper.mledger.ManagedCursor;
+import org.apache.bookkeeper.mledger.ManagedLedger;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
+import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.commons.lang3.mutable.MutableLong;
 import org.apache.pulsar.broker.delayed.AbstractDeliveryTrackerTest;
 import org.apache.pulsar.broker.delayed.MockBucketSnapshotStorage;
@@ -468,5 +470,138 @@ public class BucketDelayedDeliveryTrackerTest extends AbstractDeliveryTrackerTes
       assertEquals(tracker.getSharedBucketPriorityQueue().size(), 0);
 
       tracker.close();
+    }
+
+    private static class TrackerWithStorage {
+        final BucketDelayedDeliveryTracker tracker;
+        final MockBucketSnapshotStorage storage;
+
+        TrackerWithStorage(BucketDelayedDeliveryTracker tracker, MockBucketSnapshotStorage storage) {
+            this.tracker = tracker;
+            this.storage = storage;
+        }
+
+        void close() throws Exception {
+            tracker.close();
+            storage.close();
+        }
+    }
+
+    private TrackerWithStorage createTrackerWithMockLedger(long firstLedgerId, int maxNumBuckets)
+            throws Exception {
+        MockBucketSnapshotStorage storage = new MockBucketSnapshotStorage();
+        storage.start();
+
+        ManagedLedger mockLedger = mock(ManagedLedger.class);
+        NavigableMap<Long, LedgerInfo> ledgerInfo = new TreeMap<>();
+        ledgerInfo.put(firstLedgerId, mock(LedgerInfo.class));
+        when(mockLedger.getLedgersInfo()).thenReturn(ledgerInfo);
+        when(mockLedger.getName()).thenReturn("test-ledger");
+
+        ManagedCursor mockCursor = new MockManagedCursor("test-cursor") {
+            @Override
+            public ManagedLedger getManagedLedger() {
+                return mockLedger;
+            }
+        };
+
+        AbstractPersistentDispatcherMultipleConsumers disp =
+                mock(AbstractPersistentDispatcherMultipleConsumers.class);
+        Clock mockClock = mock(Clock.class);
+        AtomicLong mockClockTime = new AtomicLong();
+        when(mockClock.millis()).then(x -> mockClockTime.get());
+        doReturn(mockCursor).when(disp).getCursor();
+        doReturn("persistent://public/default/testDelay" + " / " + mockCursor.getName()).when(disp).getName();
+
+        BucketDelayedDeliveryTracker tracker = new BucketDelayedDeliveryTracker(disp, mock(Timer.class),
+                100000, mockClock, true, storage, 5, TimeUnit.MILLISECONDS.toMillis(10), -1, maxNumBuckets);
+        return new TrackerWithStorage(tracker, storage);
+    }
+
+    @Test
+    public void testTrimRemovesOrphanedBuckets() throws Exception {
+        TrackerWithStorage ts = createTrackerWithMockLedger(50L, 5);
+
+        for (int i = 1; i <= 31; i++) {
+            ts.tracker.addMessage(i, i, i * 10);
+        }
+        Awaitility.await().untilAsserted(() ->
+                Assert.assertTrue(ts.tracker.getImmutableBuckets().asMapOfRanges().values().stream()
+                        .noneMatch(x -> x.merging)));
+
+        int bucketCount = ts.tracker.getImmutableBuckets().asMapOfRanges().size();
+        assertTrue(bucketCount <= 5,
+                "Bucket count " + bucketCount + " should be <= maxNumBuckets=5 after trim+merge");
+
+        ts.tracker.getImmutableBuckets().asMapOfRanges().forEach((range, bucket) ->
+                assertTrue(range.lowerEndpoint() >= 50L,
+                        "Remaining bucket range " + range + " should be >= 50"));
+
+        ts.close();
+    }
+
+    @Test
+    public void testTrimHandlesDeleteFailure() throws Exception {
+        TrackerWithStorage ts = createTrackerWithMockLedger(50L, 5);
+
+        ts.storage.injectDeleteException(
+                new BucketSnapshotPersistenceException("Delete failed"));
+
+        for (int i = 1; i <= 31; i++) {
+            ts.tracker.addMessage(i, i, i * 10);
+        }
+        Awaitility.await().untilAsserted(() ->
+                Assert.assertTrue(ts.tracker.getImmutableBuckets().asMapOfRanges().values().stream()
+                        .noneMatch(x -> x.merging)));
+
+        assertTrue(ts.storage.deleteExceptionQueue.isEmpty(),
+                "Delete exception should have been consumed");
+
+        ts.close();
+    }
+
+    @Test
+    public void testTrimWithNoOrphanedBuckets() throws Exception {
+        TrackerWithStorage ts = createTrackerWithMockLedger(0L, 5);
+
+        for (int i = 1; i <= 31; i++) {
+            ts.tracker.addMessage(i, i, i * 10);
+        }
+        Awaitility.await().untilAsserted(() ->
+                Assert.assertTrue(ts.tracker.getImmutableBuckets().asMapOfRanges().values().stream()
+                        .noneMatch(x -> x.merging)));
+
+        int bucketCount = ts.tracker.getImmutableBuckets().asMapOfRanges().size();
+        assertTrue(bucketCount <= 5,
+                "Bucket count " + bucketCount + " should be <= maxNumBuckets=5");
+        assertTrue(bucketCount > 0, "Should have at least one bucket after merge");
+
+        ts.close();
+    }
+
+    @Test
+    public void testMergeEarlyReturnWhenWithinLimit() throws Exception {
+        TrackerWithStorage ts = createTrackerWithMockLedger(0L, 50);
+
+        for (int i = 1; i <= 30; i++) {
+            ts.tracker.addMessage(i, i, i * 10);
+        }
+        Awaitility.await().untilAsserted(() ->
+                Assert.assertTrue(ts.tracker.getImmutableBuckets().asMapOfRanges().values().stream()
+                        .noneMatch(x -> x.merging)));
+
+        int bucketCount = ts.tracker.getImmutableBuckets().asMapOfRanges().size();
+        assertTrue(bucketCount < 50,
+                "Bucket count " + bucketCount + " should be well below maxNumBuckets=50");
+
+        long msgsBefore = ts.tracker.getNumberOfDelayedMessages();
+        ts.tracker.addMessage(200, 200, 200 * 10);
+        Awaitility.await().untilAsserted(() ->
+                Assert.assertTrue(ts.tracker.getImmutableBuckets().asMapOfRanges().values().stream()
+                        .noneMatch(x -> x.merging)));
+
+        assertEquals(ts.tracker.getNumberOfDelayedMessages(), msgsBefore + 1);
+
+        ts.close();
     }
 }
