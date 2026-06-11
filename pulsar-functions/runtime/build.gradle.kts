@@ -18,7 +18,7 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 // Include parent module's test resources (YAML config files used by WorkerApiV2ResourceConfigTest)
@@ -36,6 +36,7 @@ tasks.named<ProcessResources>("processTestResources") {
 }
 
 dependencies {
+    implementation(libs.slog)
     api(project(":pulsar-functions:pulsar-functions-instance"))
     implementation(project(":pulsar-functions:pulsar-functions-secrets"))
     implementation(project(":pulsar-broker-common"))
@@ -49,6 +50,9 @@ dependencies {
         exclude(group = "org.bouncycastle", module = "bcutil-jdk18on")
         exclude(group = "org.bouncycastle", module = "bcprov-jdk18on")
         exclude(group = "javax.annotation", module = "javax.annotation-api")
+        exclude(group = "software.amazon.awssdk")
+        // Swagger 1.x annotations on the generated k8s models are inert metadata; nothing reads them at runtime
+        exclude(group = "io.swagger", module = "swagger-annotations")
     }
     implementation(libs.simpleclient.hotspot)
     implementation(libs.prometheus.jmx.collector)
@@ -56,7 +60,7 @@ dependencies {
     implementation(libs.guava)
     implementation(project(":pulsar-functions:pulsar-functions-proto"))
     implementation(project(":pulsar-client-original"))
-    implementation(libs.grpc.all)
+    implementation(libs.grpc.netty.shaded)
     implementation(libs.grpc.stub)
     implementation(libs.jetty.util)
     implementation(libs.byte.buddy)

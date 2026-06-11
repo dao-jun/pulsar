@@ -22,6 +22,7 @@ plugins {
 }
 
 dependencies {
+    implementation(libs.slog)
     compileOnly(project(":pulsar-client-tools"))
     compileOnly(project(":pulsar-broker"))
 
@@ -34,6 +35,7 @@ dependencies {
     testImplementation(libs.guava)
     testImplementation(project(":pulsar-client-admin-original"))
     testImplementation(project(":pulsar-client-original"))
+    testImplementation(project(":pulsar-client-api-v5"))
     testImplementation(project(":pulsar-functions:pulsar-functions-api"))
     testImplementation(libs.picocli)
 }

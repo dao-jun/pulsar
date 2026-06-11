@@ -73,8 +73,8 @@ include("bouncy-castle:bouncy-castle-bc")
 project(":bouncy-castle:bouncy-castle-bc").projectDir = file("bouncy-castle/bc")
 include("bouncy-castle:bcfips")
 include("pulsar-config-validation")
-include("structured-event-log")
 include("pulsar-client-api")
+include("pulsar-client-api-v5")
 
 // Tier 1
 include("pulsar-client-admin-api")
@@ -91,6 +91,8 @@ project(":pulsar-client-original").projectDir = file("pulsar-client")
 include("pulsar-metadata")
 include("pulsar-opentelemetry")
 include("pulsar-client-messagecrypto-bc")
+include("pulsar-client-v5")
+
 
 // Tier 4
 // Maven artifactId is "pulsar-client-admin-original" (directory is "pulsar-client-admin")
@@ -173,8 +175,6 @@ include("pulsar-package-management:pulsar-package-bookkeeper-storage")
 project(":pulsar-package-management:pulsar-package-bookkeeper-storage").projectDir = file("pulsar-package-management/bookkeeper-storage")
 
 // Tier 6.5 — jetty upgrade modules
-include("jetty-upgrade:pulsar-bookkeeper-prometheus-metrics-provider")
-project(":jetty-upgrade:pulsar-bookkeeper-prometheus-metrics-provider").projectDir = file("jetty-upgrade/bookkeeper-prometheus-metrics-provider")
 include("jetty-upgrade:pulsar-zookeeper-prometheus-metrics")
 project(":jetty-upgrade:pulsar-zookeeper-prometheus-metrics").projectDir = file("jetty-upgrade/zookeeper-prometheus-metrics")
 include("jetty-upgrade:zookeeper-with-patched-admin")
@@ -265,3 +265,5 @@ include("tests:pulsar-client-admin-shade-test")
 project(":tests:pulsar-client-admin-shade-test").projectDir = file("tests/pulsar-client-admin-shade-test")
 include("tests:pulsar-client-all-shade-test")
 project(":tests:pulsar-client-all-shade-test").projectDir = file("tests/pulsar-client-all-shade-test")
+include("tests:pulsar-client-native-image")
+project(":tests:pulsar-client-native-image").projectDir = file("tests/pulsar-client-native-image")

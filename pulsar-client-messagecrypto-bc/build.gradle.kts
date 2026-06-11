@@ -18,16 +18,16 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 dependencies {
+    implementation(libs.slog)
     compileOnly(project(":pulsar-common"))
-    compileOnly(libs.slf4j.api)
     implementation(project(":pulsar-client-api"))
     implementation(project(":bouncy-castle:bouncy-castle-bc"))
     implementation(libs.bcpkix.jdk18on)
-    implementation(libs.bcprov.ext.jdk18on)
+    implementation(libs.bcprov.jdk18on)
     implementation(libs.guava)
     implementation(libs.caffeine)
     compileOnly(libs.netty.buffer)

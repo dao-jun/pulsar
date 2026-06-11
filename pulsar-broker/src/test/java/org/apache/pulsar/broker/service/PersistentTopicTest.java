@@ -79,6 +79,8 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import lombok.Cleanup;
+import lombok.CustomLog;
+import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.mledger.AsyncCallbacks;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.AddEntryCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.CloseCallback;
@@ -154,14 +156,13 @@ import org.awaitility.Awaitility;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.mockito.stubbing.Answer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.testng.Assert;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker")
+@CustomLog
 public class PersistentTopicTest extends MockedBookKeeperTestCase {
     private ServerCnx serverCnx;
     private ManagedLedger ledgerMock;
@@ -172,7 +173,6 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
     final String failTopicName = "persistent://prop/ns-abc/failTopic";
     final String successSubName = "successSub";
     final String successSubName2 = "successSub2";
-    private static final Logger log = LoggerFactory.getLogger(PersistentTopicTest.class);
 
     protected PulsarTestContext pulsarTestContext;
 
@@ -1303,7 +1303,7 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
                 barrier.await();
                 // assertTrue(topic.unsubscribe(successSubName).isDone());
                 Thread.sleep(5, 0);
-                log.info("deleter outcome is {}", topic.delete().get());
+                log.info().attr("outcomeIs", topic.delete().get()).log("deleter outcome is");
             } catch (Exception e) {
                 e.printStackTrace();
                 gotException.set(true);
@@ -1319,7 +1319,8 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
                 final var subscriptions = topic.getSubscriptions();
                 PersistentSubscription ps = subscriptions.get(successSubName);
                 // Thread.sleep(5,0);
-                log.info("unsubscriber outcome is {}", ps.doUnsubscribe(ps.getConsumers().get(0)).get());
+                log.info().attr("outcomeIs", ps.doUnsubscribe(ps.getConsumers().get(0)).get())
+                        .log("unsubscriber outcome is");
                 // assertFalse(ps.delete().isCompletedExceptionally());
             } catch (Exception e) {
                 e.printStackTrace();
@@ -1409,7 +1410,7 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
 
                     @Override
                     public void closeComplete(Object ctx) {
-                        log.info("[{}] Successfully closed cursor ledger", "mockCursor");
+                        log.info().attr("value", "mockCursor").log("[] Successfully closed cursor ledger");
                         closeFuture.complete(null);
                     }
 
@@ -1417,7 +1418,7 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
                     public void closeFailed(ManagedLedgerException exception, Object ctx) {
                         // isFenced.set(false);
 
-                        log.error("Error closing cursor for subscription", exception);
+                        log.error().exception(exception).log("Error closing cursor for subscription");
                         closeFuture.completeExceptionally(new BrokerServiceException.PersistenceException(exception));
                     }
                 }, null);
@@ -1484,7 +1485,6 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         }).when(cursorMock).asyncMarkDelete(any(), any(), any(MarkDeleteCallback.class), any());
     }
 
-
     @Test
     public void testDeleteTopicDeleteOnMetadataStoreFailed() throws Exception {
 
@@ -1514,7 +1514,6 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         assertFalse((boolean) isClosingOrDeletingField.get(topic));
 
     }
-
 
     @Test
     public void testFailoverSubscription() throws Exception {
@@ -1817,18 +1816,20 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
     public void testCompactorSubscription() {
         PersistentTopic topic = new PersistentTopic(successTopicName, ledgerMock, brokerService);
         CompactedTopic compactedTopic = mock(CompactedTopic.class);
+        CompactedTopicContext compactedTopicContext = mock(CompactedTopicContext.class);
+        LedgerHandle ledgerHandle = mock(LedgerHandle.class);
+        when(compactedTopicContext.getLedger()).thenReturn(ledgerHandle);
         when(compactedTopic.newCompactedLedger(any(Position.class), anyLong()))
-                .thenReturn(CompletableFuture.completedFuture(mock(CompactedTopicContext.class)));
+                .thenReturn(CompletableFuture.completedFuture(compactedTopicContext));
         PersistentSubscription sub = new PulsarCompactorSubscription(topic, compactedTopic,
                 Compactor.COMPACTION_SUBSCRIPTION,
                 cursorMock);
         Position position = PositionFactory.create(1, 1);
         long ledgerId = 0xc0bfefeL;
-        sub.acknowledgeMessage(Collections.singletonList(position), AckType.Cumulative,
-                Map.of(Compactor.COMPACTED_TOPIC_LEDGER_PROPERTY, ledgerId));
+        sub.acknowledgeMessageAsync(Collections.singletonList(position), AckType.Cumulative,
+                Map.of(Compactor.COMPACTED_TOPIC_LEDGER_PROPERTY, ledgerId)).join();
         verify(compactedTopic, Mockito.times(1)).newCompactedLedger(position, ledgerId);
     }
-
 
     @Test
     public void testCompactorSubscriptionUpdatedOnInit() {
@@ -1997,7 +1998,7 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         assertFalse(cursor3.isActive());
 
         // Write messages to ledger
-        CountDownLatch latch = new CountDownLatch(backloggedThreshold);
+        CountDownLatch latch = new CountDownLatch(backloggedThreshold + 1);
         for (int i = 0; i < backloggedThreshold + 1; i++) {
             String content = "entry"; // 5 bytes
             ByteBuf entry = getMessageWithMetadata(content.getBytes());
@@ -2033,12 +2034,14 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         // read entries so, cursor1 reaches maxBacklog threshold again to be active again
         List<Entry> entries1 = cursor1.readEntries(50);
         for (Entry entry : entries1) {
-            log.info("Read entry. Position={} Content='{}'", entry.getPosition(), new String(entry.getData()));
+            log.info().attr("entryPosition", entry.getPosition()).attr("value", new String(entry.getData()))
+                    .log("Read entry. Position= Content=''");
             entry.release();
         }
         List<Entry> entries3 = cursor3.readEntries(50);
         for (Entry entry : entries3) {
-            log.info("Read entry. Position={} Content='{}'", entry.getPosition(), new String(entry.getData()));
+            log.info().attr("entryPosition", entry.getPosition()).attr("value", new String(entry.getData()))
+                    .log("Read entry. Position= Content=''");
             entry.release();
         }
 
@@ -2057,7 +2060,8 @@ public class PersistentTopicTest extends MockedBookKeeperTestCase {
         sub3.addConsumer(consumer3);
         entries3 = cursor3.readEntries(50);
         for (Entry entry : entries3) {
-            log.info("Read entry. Position={} Content='{}'", entry.getPosition(), new String(entry.getData()));
+            log.info().attr("entryPosition", entry.getPosition()).attr("value", new String(entry.getData()))
+                    .log("Read entry. Position= Content=''");
             entry.release();
         }
 

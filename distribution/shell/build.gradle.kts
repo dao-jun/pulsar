@@ -19,6 +19,7 @@
 
 plugins {
     id("pulsar.java-conventions")
+    id("pulsar.binary-license-check-conventions")
 }
 // Distribution module — no Java compilation needed
 tasks.named("compileJava") { enabled = false }
@@ -44,6 +45,7 @@ dependencies {
     distLib(project(":pulsar-client-tools"))
     distLib(libs.log4j.core)
     distLib(libs.log4j.web)
+    distLib(libs.log4j.layout.template.json)
     distLib(libs.log4j.slf4j2.impl)
     distLib(libs.simpleclient.log4j2)
     // Bouncy Castle
@@ -210,6 +212,10 @@ val shellDistZip by tasks.registering(Zip::class) {
 }
 tasks.named("assemble") {
     dependsOn(shellDistTar, shellDistZip)
+}
+
+binaryLicenseCheck {
+    archive.set(shellDistTar.flatMap { it.archiveFile })
 }
 
 // Export the runtime classpath to a file for bin/ scripts to use

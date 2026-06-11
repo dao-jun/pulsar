@@ -18,7 +18,7 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 // Include parent module's test resources (YAML config files)
@@ -36,6 +36,7 @@ tasks.named<ProcessResources>("processTestResources") {
 }
 
 dependencies {
+    implementation(libs.slog)
     api(project(":pulsar-functions:pulsar-functions-runtime"))
     implementation(project(":pulsar-broker-common"))
     implementation(project(":pulsar-opentelemetry"))
@@ -44,7 +45,7 @@ dependencies {
     implementation(project(":pulsar-functions:pulsar-functions-proto"))
     implementation(project(":pulsar-functions:pulsar-functions-secrets"))
     implementation(project(":pulsar-docs-tools")) {
-        exclude(group = "io.swagger")
+        exclude(group = "io.swagger.core.v3")
     }
     implementation(project(":pulsar-package-management:pulsar-package-core"))
 
@@ -72,8 +73,8 @@ dependencies {
 
     implementation(libs.jetty.server)
     implementation(libs.jetty.alpn.conscrypt.server)
-    implementation(libs.jetty.ee8.servlet)
-    implementation(libs.jetty.ee8.servlets)
+    implementation(libs.jetty.ee10.servlet)
+    implementation(libs.jetty.ee10.servlets)
 
     implementation(libs.jakarta.activation.api)
     implementation(libs.jakarta.ws.rs.api)
@@ -82,10 +83,7 @@ dependencies {
     implementation(libs.simpleclient.hotspot)
     implementation(libs.simpleclient.common)
 
-    compileOnly(libs.swagger.core) {
-        exclude(group = "com.fasterxml.jackson.core")
-        exclude(group = "com.fasterxml.jackson.dataformat")
-    }
+    compileOnly(libs.swagger.annotations)
 
     testImplementation(libs.protobuf.java.util)
     testImplementation(project(":pulsar-functions:pulsar-functions-api-examples"))
@@ -112,6 +110,7 @@ dependencies {
 }
 
 tasks.withType<Test> {
+    dependsOn(testNars, testExamplesJar)
     // Map resolved NAR/JAR files to system properties
     val narFiles = testNars.incoming.artifacts.resolvedArtifacts
     val jarFiles = testExamplesJar.incoming.artifacts.resolvedArtifacts

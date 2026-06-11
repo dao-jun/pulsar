@@ -18,10 +18,11 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 dependencies {
+    implementation(libs.slog)
     api(project(":pulsar-client-admin-api"))
     implementation(project(":pulsar-client-original"))
     implementation(project(":pulsar-common"))
@@ -30,12 +31,12 @@ dependencies {
     implementation(libs.jersey.media.json.jackson)
     implementation(libs.jersey.media.multipart)
     implementation(libs.jersey.hk2)
-    implementation(libs.jackson.jaxrs.json.provider)
+    implementation(libs.jackson.jakarta.rs.json.provider)
     implementation(libs.jackson.databind)
     implementation(libs.jakarta.ws.rs.api)
     implementation(libs.jakarta.xml.bind.api)
     implementation(libs.jakarta.activation.api)
-    runtimeOnly(libs.jakarta.activation)
+    runtimeOnly(libs.angus.activation)
     implementation(libs.guava)
     implementation(libs.gson)
     implementation(libs.asynchttpclient)

@@ -18,7 +18,7 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     alias(libs.plugins.protobuf)
 }
 
@@ -45,9 +45,9 @@ dependencies {
     implementation(libs.commons.lang3)
     implementation(libs.asynchttpclient)
     implementation(libs.netty.reactive.streams)
-    implementation(libs.slf4j.api)
+    implementation(libs.slog)
     implementation(libs.commons.codec)
-    implementation(libs.sketches.core)
+    implementation(libs.datasketches.java)
     implementation(libs.gson)
     implementation(libs.avro) {
         exclude(group = "org.slf4j")
@@ -67,6 +67,7 @@ dependencies {
 
     testImplementation(libs.jsonassert)
     testImplementation(libs.awaitility)
+    testImplementation(libs.wiremock)
     testImplementation(libs.protobuf.java)
     testImplementation(libs.protobuf.java.util)
     testImplementation(libs.opentelemetry.sdk)
@@ -89,7 +90,9 @@ sourceSets["main"].proto { exclude("**/*") }
 // Generate Avro test classes from .avsc schema files
 val avroTools by configurations.creating
 dependencies {
-    avroTools("org.apache.avro:avro-tools:${libs.versions.avro.get()}")
+    avroTools("org.apache.avro:avro-tools:${libs.versions.avro.get()}") {
+        exclude(group = "org.eclipse.jetty", module = "jetty-server")
+    }
 }
 
 val generateTestAvro by tasks.registering(JavaExec::class) {

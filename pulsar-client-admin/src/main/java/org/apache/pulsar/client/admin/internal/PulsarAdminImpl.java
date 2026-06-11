@@ -20,13 +20,14 @@ package org.apache.pulsar.client.admin.internal;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import com.google.common.annotations.VisibleForTesting;
+import jakarta.ws.rs.client.Client;
+import jakarta.ws.rs.client.ClientBuilder;
+import jakarta.ws.rs.client.WebTarget;
 import java.io.IOException;
 import java.net.URL;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
-import javax.ws.rs.client.Client;
-import javax.ws.rs.client.ClientBuilder;
-import javax.ws.rs.client.WebTarget;
+import lombok.CustomLog;
 import lombok.Getter;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.admin.Bookies;
@@ -43,6 +44,7 @@ import org.apache.pulsar.client.admin.ProxyStats;
 import org.apache.pulsar.client.admin.PulsarAdmin;
 import org.apache.pulsar.client.admin.ResourceGroups;
 import org.apache.pulsar.client.admin.ResourceQuotas;
+import org.apache.pulsar.client.admin.ScalableTopics;
 import org.apache.pulsar.client.admin.Schemas;
 import org.apache.pulsar.client.admin.Sink;
 import org.apache.pulsar.client.admin.Sinks;
@@ -66,15 +68,13 @@ import org.glassfish.jersey.client.ClientConfig;
 import org.glassfish.jersey.client.ClientProperties;
 import org.glassfish.jersey.jackson.JacksonFeature;
 import org.glassfish.jersey.media.multipart.MultiPartFeature;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Pulsar client admin API client.
  */
 @SuppressWarnings("deprecation")
+@CustomLog
 public class PulsarAdminImpl implements PulsarAdmin {
-    private static final Logger LOG = LoggerFactory.getLogger(PulsarAdmin.class);
 
     public static final int DEFAULT_REQUEST_TIMEOUT_SECONDS = 300;
 
@@ -105,6 +105,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
     private final Packages packages;
     private final Transactions transactions;
     private final MetadataMigration metadataMigration;
+    private final ScalableTopics scalableTopics;
     protected final WebTarget root;
     protected final Authentication auth;
     @Getter
@@ -123,7 +124,9 @@ public class PulsarAdminImpl implements PulsarAdmin {
 
         this.clientConfigData = clientConfigData;
         this.auth = clientConfigData != null ? clientConfigData.getAuthentication() : new AuthenticationDisabled();
-        LOG.debug("created: serviceUrl={}, authMethodName={}", serviceUrl, auth.getAuthMethodName());
+        log.debug().attr("serviceUrl", serviceUrl)
+                .attr("authMethodName", auth.getAuthMethodName())
+                .log("created");
 
         this.auth.start();
 
@@ -189,6 +192,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
         this.packages = new PackagesImpl(root, auth, asyncHttpConnector, requestTimeoutMs);
         this.transactions = new TransactionsImpl(root, auth, requestTimeoutMs);
         this.metadataMigration = new MetadataMigrationImpl(root, auth, requestTimeoutMs);
+        this.scalableTopics = new ScalableTopicsImpl(root, auth, requestTimeoutMs);
 
         if (originalCtxLoader != null) {
             Thread.currentThread().setContextClassLoader(originalCtxLoader);
@@ -430,6 +434,11 @@ public class PulsarAdminImpl implements PulsarAdmin {
         return metadataMigration;
     }
 
+    @Override
+    public ScalableTopics scalableTopics() {
+        return scalableTopics;
+    }
+
     /**
      * Close the Pulsar admin client to release all the resources.
      */
@@ -438,7 +447,7 @@ public class PulsarAdminImpl implements PulsarAdmin {
         try {
             auth.close();
         } catch (IOException e) {
-            LOG.error("Failed to close the authentication service", e);
+            log.error().exception(e).log("Failed to close the authentication service");
         }
         client.close();
 

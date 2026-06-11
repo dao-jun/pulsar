@@ -18,13 +18,16 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
     id("pulsar.test-certs-conventions")
 }
 
 dependencies {
+    implementation(libs.slog)
     implementation(project(":pulsar-client-original"))
     implementation(project(":pulsar-client-admin-original"))
+    implementation(project(":pulsar-client-api-v5"))
+    implementation(project(":pulsar-client-v5"))
     implementation(project(":pulsar-client-messagecrypto-bc"))
     implementation(project(":pulsar-broker"))
     implementation(project(":pulsar-cli-utils"))

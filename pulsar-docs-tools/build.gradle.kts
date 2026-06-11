@@ -18,11 +18,13 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 dependencies {
+    implementation(libs.commons.lang3)
+    implementation(libs.guava)
+    implementation(libs.slog)
     implementation(libs.swagger.annotations)
-    implementation(libs.swagger.core)
     implementation(libs.picocli)
 }

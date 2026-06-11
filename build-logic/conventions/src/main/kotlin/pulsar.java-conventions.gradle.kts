@@ -24,9 +24,6 @@ plugins {
 
 val catalog = the<VersionCatalogsExtension>().named("libs")
 
-group = "org.apache.pulsar"
-version = catalog.findVersion("pulsar").get().requiredVersion
-
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
     options.release.set(17)
@@ -44,7 +41,11 @@ configurations.all {
     // (EnumResolver.constructUsingToString signature changed in 2.19+).
     resolutionStrategy.eachDependency {
         if (requested.group.startsWith("com.fasterxml.jackson")) {
-            useVersion(catalog.findVersion("jackson").get().requiredVersion)
+            if (requested.name == "jackson-annotations") {
+                useVersion(catalog.findVersion("jackson-annotations").get().requiredVersion)
+            } else {
+                useVersion(catalog.findVersion("jackson").get().requiredVersion)
+            }
         }
     }
 }
@@ -71,6 +72,22 @@ dependencies {
             allVariants {
                 withDependencies {
                     removeAll { it.group == "org.bouncycastle" }
+                }
+            }
+        }
+        // libthrift is a transitive dependency of distributedlog-core.
+        // libthrift 0.23.0 upgraded to jakarta.* and HttpComponents 5 deps for its HTTP/servlet
+        // transports, which distributedlog-core does not use (only TJSON/TMemory serialization is needed).
+        // Add a component metadata rule to exclude the unnecessary dependencies.
+        withModule("org.apache.thrift:libthrift") {
+            allVariants {
+                withDependencies {
+                    removeAll {
+                        (it.group == "jakarta.annotation" && it.name == "jakarta.annotation-api") ||
+                        (it.group == "jakarta.servlet" && it.name == "jakarta.servlet-api") ||
+                        it.group == "org.apache.httpcomponents.client5" ||
+                        it.group == "org.apache.httpcomponents.core5"
+                    }
                 }
             }
         }
@@ -154,7 +171,9 @@ tasks.withType<Test>().configureEach {
     maxParallelForks = 4
     val failFastValue = providers.gradleProperty("testFailFast").getOrElse("true").toBoolean()
     failFast = failFastValue
-    systemProperty("testRetryCount", providers.gradleProperty("testRetryCount").getOrElse("1"))
+    val ideaActive = providers.systemProperty("idea.active").map { it.toBoolean() }.getOrElse(false)
+    val defaultTestRetryCount = if (ideaActive) "0" else "1"
+    systemProperty("testRetryCount", providers.gradleProperty("testRetryCount").getOrElse(defaultTestRetryCount))
     systemProperty("testFailFast", failFastValue.toString())
     jvmArgs(
         "--add-opens", "java.base/jdk.internal.loader=ALL-UNNAMED",
@@ -174,6 +193,11 @@ tasks.withType<Test>().configureEach {
         "-Dpulsar.allocator.exit_on_oom=false",
         "-Dpulsar.allocator.out_of_memory_policy=FallbackToHeap",
         "-Dpulsar.test.preventExit=true",
+        // Force IPv4 to match Pulsar's runtime scripts (bin/pulsar, bin/bookkeeper). BookKeeper's
+        // BookieId validation rejects IPv6 zone identifiers (e.g. fe80::1%lo0), so on hosts where the
+        // loopback interface resolves to an IPv6 link-local address (notably macOS) bookies bound to
+        // loopback would otherwise fail to start.
+        "-Djava.net.preferIPv4Stack=true",
     )
 }
 

@@ -18,10 +18,11 @@
  */
 
 plugins {
-    id("pulsar.java-conventions")
+    id("pulsar.public-java-library-conventions")
 }
 
 dependencies {
+    implementation(libs.slog)
     api(project(":pulsar-common"))
     api(project(":pulsar-functions:pulsar-functions-api"))
     implementation(project(":pulsar-functions:pulsar-functions-proto"))
@@ -35,6 +36,7 @@ dependencies {
     implementation(libs.protobuf.java.util)
     implementation(libs.byte.buddy)
     implementation(libs.zt.zip)
+    implementation(libs.guava)
 
     testImplementation(libs.wiremock)
     testImplementation(libs.json)

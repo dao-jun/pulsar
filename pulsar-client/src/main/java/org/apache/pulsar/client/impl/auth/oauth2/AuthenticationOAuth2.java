@@ -28,8 +28,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import lombok.CustomLog;
 import lombok.Data;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.JavaVersion;
 import org.apache.commons.lang3.NotImplementedException;
 import org.apache.commons.lang3.StringUtils;
@@ -39,6 +39,7 @@ import org.apache.pulsar.client.api.AuthenticationDataProvider;
 import org.apache.pulsar.client.api.EncodedAuthenticationParameterSupport;
 import org.apache.pulsar.client.api.PulsarClientException;
 import org.apache.pulsar.client.impl.AuthenticationUtil;
+import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenEndpointAuthMethod;
 import org.apache.pulsar.client.impl.auth.oauth2.protocol.TokenResult;
 import org.apache.pulsar.common.util.Backoff;
 
@@ -69,10 +70,11 @@ import org.apache.pulsar.common.util.Backoff;
  *
  * This class is intended to be called from multiple threads, and is therefore designed to be thread-safe.
  */
-@Slf4j
+@CustomLog
 public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticationParameterSupport {
 
     public static final String CONFIG_PARAM_TYPE = "type";
+    public static final String CONFIG_PARAM_TOKEN_ENDPOINT_AUTH_METHOD = "tokenEndpointAuthMethod";
     public static final String CONFIG_PARAM_EARLY_TOKEN_REFRESH_PERCENT = "earlyTokenRefreshPercent";
     public static final String TYPE_CLIENT_CREDENTIALS = "client_credentials";
     public static final int EARLY_TOKEN_REFRESH_PERCENT_DEFAULT = 1; // feature disabled by default
@@ -158,7 +160,16 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         Map<String, String> params = parseAuthParameters(encodedAuthParamString);
         String type = params.getOrDefault(CONFIG_PARAM_TYPE, TYPE_CLIENT_CREDENTIALS);
         if (TYPE_CLIENT_CREDENTIALS.equals(type)) {
-            this.flow = ClientCredentialsFlow.fromParameters(params);
+            TokenEndpointAuthMethod authMethod = TokenEndpointAuthMethod.fromValue(
+                    params.getOrDefault(CONFIG_PARAM_TOKEN_ENDPOINT_AUTH_METHOD,
+                            TokenEndpointAuthMethod.CLIENT_SECRET_POST.value()));
+            if (authMethod == TokenEndpointAuthMethod.CLIENT_SECRET_POST) {
+                this.flow = ClientCredentialsFlow.fromParameters(params);
+            } else if (authMethod == TokenEndpointAuthMethod.TLS_CLIENT_AUTH) {
+                this.flow = TlsClientAuthFlow.fromParameters(params);
+            } else {
+                throw new IllegalArgumentException("Unsupported auth method: " + authMethod);
+            }
         } else {
             throw new IllegalArgumentException("Unsupported authentication type: " + type);
         }
@@ -251,9 +262,7 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
      * Retrieve the token (synchronously), and then schedule refresh runnable.
      */
     private void authenticate() throws PulsarClientException {
-        if (log.isDebugEnabled()) {
             log.debug("Attempting to retrieve OAuth2 token now.");
-        }
         TokenResult tr = this.flow.authenticate();
         this.cachedToken = new CachedToken(tr);
         handleSuccessfulTokenRefresh();
@@ -285,7 +294,9 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
             this.authenticate();
         } catch (PulsarClientException | RuntimeException e) {
             long delayMillis = backoff.next().toMillis();
-            log.error("Error refreshing token. Will retry in {} millis.", delayMillis, e);
+            log.error().attr("delayMillis", delayMillis)
+                    .exception(e)
+                    .log("Error refreshing token. Will retry later");
             scheduleRefresh(delayMillis);
         }
     }
@@ -351,4 +362,3 @@ public class AuthenticationOAuth2 implements Authentication, EncodedAuthenticati
         }
     }
 }
-

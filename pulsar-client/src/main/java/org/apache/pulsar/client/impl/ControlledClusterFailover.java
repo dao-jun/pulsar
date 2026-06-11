@@ -35,9 +35,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import lombok.CustomLog;
 import lombok.Data;
 import lombok.NonNull;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.pulsar.PulsarVersion;
 import org.apache.pulsar.client.api.Authentication;
 import org.apache.pulsar.client.api.AuthenticationFactory;
@@ -57,7 +57,15 @@ import org.asynchttpclient.Response;
 import org.asynchttpclient.channel.DefaultKeepAliveStrategy;
 import org.jspecify.annotations.Nullable;
 
-@Slf4j
+/**
+ * A service URL provider that fetches controlled failover configuration from an external HTTP service
+ * and updates the Pulsar client when the returned configuration changes.
+ *
+ * <p>Each instance is tied to the lifecycle of one {@link PulsarClient}. Once initialized by a
+ * Pulsar client, it must not be reused by another client. Create a new provider instance for each
+ * Pulsar client.
+ */
+@CustomLog
 public class ControlledClusterFailover implements ServiceUrlProvider {
     private static final int DEFAULT_CONNECT_TIMEOUT_IN_SECONDS = 10;
     private static final int DEFAULT_READ_TIMEOUT_IN_SECONDS = 30;
@@ -111,7 +119,10 @@ public class ControlledClusterFailover implements ServiceUrlProvider {
     }
 
     @Override
-    public void initialize(PulsarClient client) {
+    public synchronized void initialize(PulsarClient client) {
+        if (this.pulsarClient != null) {
+            throw new IllegalStateException("ServiceUrlProvider has already been initialized");
+        }
         this.pulsarClient = (PulsarClientImpl) client;
         this.httpClient = buildHttpClient();
         this.requestBuilder = httpClient.prepareGet(urlProvider)
@@ -137,8 +148,9 @@ public class ControlledClusterFailover implements ServiceUrlProvider {
                 if (controlledConfiguration != null
                         && !Strings.isNullOrEmpty(controlledConfiguration.getServiceUrl())
                         && !controlledConfiguration.equals(currentControlledConfiguration)) {
-                    log.info("Switch Pulsar service url from {} to {}",
-                            currentControlledConfiguration, controlledConfiguration.toString());
+                    log.info().attr("currentConfig", currentControlledConfiguration)
+                            .attr("newConfig", controlledConfiguration.toString())
+                            .log("Switching Pulsar service url");
 
                     Authentication authentication = null;
                     if (!Strings.isNullOrEmpty(controlledConfiguration.authPluginClassName)
@@ -164,8 +176,10 @@ public class ControlledClusterFailover implements ServiceUrlProvider {
                     currentControlledConfiguration = controlledConfiguration;
                 }
             } catch (IOException e) {
-                log.error("Failed to switch new Pulsar url, current: {}, new: {}",
-                        currentControlledConfiguration, controlledConfiguration, e);
+                log.error().attr("current", currentControlledConfiguration)
+                        .attr("new", controlledConfiguration)
+                        .exception(e)
+                        .log("Failed to switch Pulsar service url");
             }
         }), interval, interval, TimeUnit.MILLISECONDS);
     }
@@ -188,9 +202,9 @@ public class ControlledClusterFailover implements ServiceUrlProvider {
                 String content = response.getResponseBody(StandardCharsets.UTF_8);
                 return ObjectMapperFactory.getMapper().reader().readValue(content, ControlledConfiguration.class);
             }
-            log.warn("Failed to fetch controlled configuration, status code: {}", statusCode);
+            log.warn().attr("code", statusCode).log("Failed to fetch controlled configuration, status code");
         } catch (InterruptedException | ExecutionException e) {
-            log.error("Failed to fetch controlled configuration ", e);
+            log.error().exception(e).log("Failed to fetch controlled configuration ");
         }
 
         return null;
@@ -208,7 +222,7 @@ public class ControlledClusterFailover implements ServiceUrlProvider {
             try {
                 return ObjectMapperFactory.getMapper().writer().writeValueAsString(this);
             } catch (JsonProcessingException e) {
-                log.warn("Failed to write as json. ", e);
+                log.warn().exception(e).log("Failed to write as json. ");
                 return null;
             }
         }
@@ -220,7 +234,7 @@ public class ControlledClusterFailover implements ServiceUrlProvider {
     }
 
     @Override
-    public void close() {
+    public synchronized void close() {
         this.executor.shutdown();
         if (httpClient != null) {
             try {

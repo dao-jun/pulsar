@@ -18,7 +18,6 @@
  */
 package org.apache.bookkeeper.mledger.impl;
 
-import static org.apache.pulsar.common.util.PortManager.releaseLockedPort;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
@@ -40,7 +39,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import lombok.Cleanup;
-import lombok.extern.slf4j.Slf4j;
+import lombok.CustomLog;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.LedgerEntry;
 import org.apache.bookkeeper.client.PulsarBookKeeperTestClient;
@@ -68,7 +67,7 @@ import org.awaitility.Awaitility;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-@Slf4j
+@CustomLog
 public class ManagedLedgerBkTest extends BookKeeperClusterTestCase {
 
     private final ObjectMapper jackson = new ObjectMapper();
@@ -134,7 +133,7 @@ public class ManagedLedgerBkTest extends BookKeeperClusterTestCase {
         metadataStore.unsetAlwaysFail();
 
         bkc = new PulsarBookKeeperTestClient(baseClientConf);
-        int port = startNewBookie();
+        startNewBookie();
 
         // Reconnect a new bk client
         factory.shutdown();
@@ -164,7 +163,6 @@ public class ManagedLedgerBkTest extends BookKeeperClusterTestCase {
         assertEquals("entry-2", new String(entries.get(0).getData()));
         entries.forEach(Entry::release);
         factory.shutdown();
-        releaseLockedPort(port);
     }
 
     @Test
@@ -743,15 +741,15 @@ public class ManagedLedgerBkTest extends BookKeeperClusterTestCase {
                 cursor1.delete(p);
             }
         }
-        log.info("ack ranges: {}", cursor1.getIndividuallyDeletedMessagesSet().size());
+        log.info().attr("ackRanges", cursor1.getIndividuallyDeletedMessagesSet().size()).log("Ack ranges count");
 
         // reopen and recover cursor
         ledger1.close();
         ManagedLedger ledger2 = factory.open(mlName, config2);
         ManagedCursorImpl cursor2 = (ManagedCursorImpl) ledger2.openCursor(cursorName);
 
-        log.info("before: {}", cursor1.getIndividuallyDeletedMessagesSet().asRanges());
-        log.info("after : {}", cursor2.getIndividuallyDeletedMessagesSet().asRanges());
+        log.info().attr("ranges", cursor1.getIndividuallyDeletedMessagesSet().asRanges()).log("Ranges before reopen");
+        log.info().attr("ranges", cursor2.getIndividuallyDeletedMessagesSet().asRanges()).log("Ranges after reopen");
         assertEquals(cursor1.getIndividuallyDeletedMessagesSet().asRanges(),
                 cursor2.getIndividuallyDeletedMessagesSet().asRanges());
         assertEquals(cursor1.markDeletePosition, cursor2.markDeletePosition);

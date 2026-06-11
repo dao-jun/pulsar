@@ -56,11 +56,12 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiConsumer;
 import lombok.Cleanup;
+import lombok.CustomLog;
 import lombok.SneakyThrows;
-import lombok.extern.slf4j.Slf4j;
 import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.BookKeeper;
 import org.apache.bookkeeper.client.api.OpenBuilder;
@@ -91,6 +92,7 @@ import org.apache.pulsar.client.api.Producer;
 import org.apache.pulsar.client.api.ProducerBuilder;
 import org.apache.pulsar.client.api.PulsarClient;
 import org.apache.pulsar.client.api.PulsarClientException;
+import org.apache.pulsar.client.api.RawReader;
 import org.apache.pulsar.client.api.Reader;
 import org.apache.pulsar.client.api.Schema;
 import org.apache.pulsar.client.api.SubscriptionInitialPosition;
@@ -117,7 +119,7 @@ import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 @Test(groups = "broker-impl")
-@Slf4j
+@CustomLog
 public class CompactionTest extends MockedPulsarServiceBaseTest {
     protected ScheduledExecutorService compactionScheduler;
     protected BookKeeper bk;
@@ -161,6 +163,7 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
     public void beforeMethod() throws Exception {
         admin.namespaces().removeRetention("my-tenant/my-ns");
         AbstractTwoPhaseCompactor.injectionAfterSeekInPhaseTwo = () -> {};
+        AbstractTwoPhaseCompactor.injectionPhaseTwoSeek = RawReader::seekAsync;
     }
 
     protected long compact(String topic) throws ExecutionException, InterruptedException {
@@ -635,6 +638,80 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
         assertEquals(messages.get(0).getKey(), "key2");
         assertEquals(messages.get(1).getKey(), "key3");
         assertEquals(messages.get(2).getKey(), "key5");
+    }
+
+    /**
+     * Write raw non-batch entries directly to the managed ledger without
+     * uncompressedSize, as seen with some non-Java clients. Verifies that
+     * null-value tombstones remove keys during compaction.
+     */
+    @Test
+    public void testNonBatchedMessageWithNullValue() throws Exception {
+        String topic = "persistent://my-tenant/my-ns/non-batched-message-with-null-value";
+
+        admin.topics().createNonPartitionedTopic(topic);
+        pulsarClient.newConsumer().topic(topic).subscriptionName("sub1")
+                .receiverQueueSize(1).readCompacted(true).subscribe().close();
+
+        PersistentTopic persistentTopic =
+                (PersistentTopic) pulsar.getBrokerService().getTopic(topic, false).join().get();
+        ManagedLedgerImpl ml = (ManagedLedgerImpl) persistentTopic.getManagedLedger();
+
+        long seqId = 0;
+
+        // key1: value then null-value tombstone
+        ml.addEntry(buildNonBatchEntry("key1", "my-message-1".getBytes(), seqId++));
+        ml.addEntry(buildNonBatchEntry("key1", null, seqId++));
+
+        // key2: value only (should survive)
+        ml.addEntry(buildNonBatchEntry("key2", "my-message-3".getBytes(), seqId++));
+
+        // key3: value then null-value tombstone
+        ml.addEntry(buildNonBatchEntry("key3", "my-message-4".getBytes(), seqId++));
+        ml.addEntry(buildNonBatchEntry("key3", null, seqId++));
+
+        // key4: value only (should survive)
+        ml.addEntry(buildNonBatchEntry("key4", "my-message-6".getBytes(), seqId++));
+
+        compact(topic);
+
+        List<Message<byte[]>> messages = new ArrayList<>();
+        try (Consumer<byte[]> consumer = pulsarClient.newConsumer().topic(topic)
+             .subscriptionName("sub1").receiverQueueSize(1).readCompacted(true).subscribe()) {
+            while (true) {
+                Message<byte[]> message = consumer.receive(5, TimeUnit.SECONDS);
+                if (message == null) {
+                    break;
+                }
+                messages.add(message);
+            }
+        }
+
+        assertEquals(messages.size(), 2);
+        assertEquals(messages.get(0).getKey(), "key2");
+        assertEquals(messages.get(1).getKey(), "key4");
+    }
+
+    private byte[] buildNonBatchEntry(String key, byte[] payload, long sequenceId) {
+        org.apache.pulsar.common.api.proto.MessageMetadata metadata =
+                new org.apache.pulsar.common.api.proto.MessageMetadata();
+        metadata.setPartitionKey(key);
+        metadata.setPublishTime(System.currentTimeMillis());
+        metadata.setProducerName("test-non-batch");
+        metadata.setSequenceId(sequenceId);
+        if (payload == null) {
+            metadata.setNullValue(true);
+        }
+        ByteBuf payloadBuf = io.netty.buffer.Unpooled.wrappedBuffer(
+                payload != null ? payload : new byte[0]);
+        ByteBuf entry = org.apache.pulsar.common.protocol.Commands.serializeMetadataAndPayload(
+                org.apache.pulsar.common.protocol.Commands.ChecksumType.Crc32c,
+                metadata, payloadBuf);
+        byte[] bytes = new byte[entry.readableBytes()];
+        entry.readBytes(bytes);
+        entry.release();
+        payloadBuf.release();
+        return bytes;
     }
 
     @Test
@@ -2156,12 +2233,15 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
         Mockito.doAnswer(invocationOnMock -> {
             List<Position> positions = invocationOnMock.getArgument(0);
             Map<String, Long> properties = invocationOnMock.getArgument(2);
-            log.info("acknowledgeMessage positions: {} properties: {}", positions, properties);
+            log.info()
+                    .attr("positions", positions)
+                    .attr("properties", properties)
+                    .log("acknowledgeMessage positions: properties");
             compactedLedgerId.set(properties.get(Compactor.COMPACTED_TOPIC_LEDGER_PROPERTY));
             try {
                 return invocationOnMock.callRealMethod();
             } finally {
-                log.info("acknowledgeMessage completed {}", positions);
+                log.info().attr("positions", positions).log("acknowledgeMessage completed");
                 compactionAckedLatch.countDown();
                 // add delay here to introduce possible races with deletion
                 Thread.sleep(500);
@@ -2484,7 +2564,7 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
         @Cleanup final var producer = pulsarClient.newProducer(Schema.STRING).topic(topic).create();
         final BiConsumer<String, String> send = (key, value) -> {
             final var msgId = producer.newMessage().key(key).value(value).sendAsync().join();
-            log.info("Sent {} => {} to {}", key, value, msgId);
+            log.info().attr("sent", key).attr("value", value).attr("msgId", msgId).log("Sent => to");
         };
 
         send.accept("key-0", "value");
@@ -2518,6 +2598,35 @@ public class CompactionTest extends MockedPulsarServiceBaseTest {
         // The original ledger still exists so old values of "key-1" can be read
         verifyReadKeyValues(topic, false, List.of("key-0", "value", "key-1", "value-0", "key-1", "value-1", "key-1",
                 "value-2", "key-2", "value-0", "key-2", "value-1"));
+    }
+
+    @Test
+    public void testPhaseTwoSeekRetriesOnConnectException() throws Exception {
+        final var topic = "persistent://my-tenant/my-ns/phase-two-seek-retry";
+        @Cleanup final var producer = pulsarClient.newProducer(Schema.STRING).topic(topic).create();
+        producer.newMessage().key("k").value("v0").send();
+        producer.newMessage().key("k").value("v1").send();
+
+        // Simulate the production race: PersistentSubscription.resetCursorInternal disconnects the
+        // consumer before responding to the seek, which fails the client's in-flight seek future
+        // with ConnectException. The first attempt here returns a synthetic failure without invoking
+        // the real seek (so nothing is in flight on the underlying ConsumerImpl); the retry calls
+        // seekAsync for real and the compaction proceeds.
+        final var attempts = new AtomicInteger(0);
+        AbstractTwoPhaseCompactor.injectionPhaseTwoSeek = (reader, msgId) -> {
+            if (attempts.getAndIncrement() == 0) {
+                return FutureUtil.failedFuture(
+                        new PulsarClientException.ConnectException("simulated disconnect during seek"));
+            }
+            return reader.seekAsync(msgId);
+        };
+
+        final long compactedLedgerId = compact(topic);
+        assertNotEquals(compactedLedgerId, -1L);
+        assertTrue(attempts.get() >= 2,
+                "Seek should have been retried at least once, attempts=" + attempts.get());
+
+        verifyReadKeyValues(topic, true, List.of("k", "v1"));
     }
 
     private void verifyReadKeyValues(String topic, boolean readCompacted, List<String> expectedKeyValues)

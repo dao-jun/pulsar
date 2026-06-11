@@ -18,15 +18,15 @@
  */
 package org.apache.pulsar.client.admin.internal;
 
+import jakarta.ws.rs.client.Entity;
+import jakarta.ws.rs.client.InvocationCallback;
+import jakarta.ws.rs.client.WebTarget;
+import jakarta.ws.rs.core.MediaType;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import javax.ws.rs.client.Entity;
-import javax.ws.rs.client.InvocationCallback;
-import javax.ws.rs.client.WebTarget;
-import javax.ws.rs.core.MediaType;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pulsar.client.admin.GrantTopicPermissionOptions;
 import org.apache.pulsar.client.admin.ListNamespaceTopicsOptions;
@@ -1783,15 +1783,21 @@ public class NamespacesImpl extends BaseResource implements Namespaces {
     }
 
     @Override
-    public void setIsAllowAutoUpdateSchema(String namespace, boolean isAllowAutoUpdateSchema)
+    public void setIsAllowAutoUpdateSchema(String namespace, boolean isAllowAutoUpdateSchema,
+                                           Boolean allowAutoUpdateSchemaWithReplicator)
             throws PulsarAdminException {
-        sync(() -> setIsAllowAutoUpdateSchemaAsync(namespace, isAllowAutoUpdateSchema));
+        sync(() -> setIsAllowAutoUpdateSchemaAsync(namespace, isAllowAutoUpdateSchema,
+                allowAutoUpdateSchemaWithReplicator));
     }
 
     @Override
-    public CompletableFuture<Void> setIsAllowAutoUpdateSchemaAsync(String namespace, boolean isAllowAutoUpdateSchema) {
+    public CompletableFuture<Void> setIsAllowAutoUpdateSchemaAsync(
+            String namespace, boolean isAllowAutoUpdateSchema, Boolean allowAutoUpdateSchemaWithReplicator) {
         NamespaceName ns = NamespaceName.get(namespace);
         WebTarget path = namespacePath(ns, "isAllowAutoUpdateSchema");
+        if (allowAutoUpdateSchemaWithReplicator != null) {
+            path = path.queryParam("allowAutoUpdateSchemaWithReplicator", allowAutoUpdateSchemaWithReplicator);
+        }
         return asyncPostRequest(path, Entity.entity(isAllowAutoUpdateSchema, MediaType.APPLICATION_JSON));
     }
 
