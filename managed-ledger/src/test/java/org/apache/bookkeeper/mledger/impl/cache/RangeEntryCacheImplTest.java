@@ -30,15 +30,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
-import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.IntSupplier;
-import org.apache.bookkeeper.client.AsyncCallback.ReadCallback;
-import org.apache.bookkeeper.client.BKException;
 import org.apache.bookkeeper.client.LedgerHandle;
 import org.apache.bookkeeper.client.api.LedgerEntries;
 import org.apache.bookkeeper.client.api.LedgerEntry;
@@ -287,7 +284,7 @@ public class RangeEntryCacheImplTest {
         RangeEntryCacheImpl cache = new RangeEntryCacheImpl(mockEntryCacheManager, mockManagedLedger, false,
                 mockRangeCacheRemovalQueue, EntryLengthFunction.DEFAULT, mock(PendingReadsManager.class));
 
-        // Use LedgerHandle mock (not ReadHandle) so instanceof LedgerHandle check passes
+        // Use LedgerHandle mock so batch read path is taken
         LedgerHandle ledgerHandle = mock(LedgerHandle.class);
         when(ledgerHandle.getId()).thenReturn(1L);
 
@@ -296,32 +293,29 @@ public class RangeEntryCacheImplTest {
         for (long i = 0; i <= 4; i++) {
             entryList.add(LedgerEntryImpl.create(1L, i, 1, Unpooled.wrappedBuffer(new byte[]{(byte) i})));
         }
-        doAnswer(invocation -> {
-            ReadCallback cb = invocation.getArgument(3);
-            Object ctx = invocation.getArgument(4);
-            Iterator<LedgerEntry> it = entryList.iterator();
-            Enumeration<org.apache.bookkeeper.client.LedgerEntry> enumeration = new Enumeration<>() {
-                @Override
-                public boolean hasMoreElements() {
-                    return it.hasNext();
+        LedgerEntries batchEntries = new LedgerEntries() {
+            @Override
+            public LedgerEntry getEntry(long entryId) {
+                for (LedgerEntry e : entryList) {
+                    if (e.getEntryId() == entryId) {
+                        return e;
+                    }
                 }
-                @Override
-                public org.apache.bookkeeper.client.LedgerEntry nextElement() {
-                    LedgerEntry apiEntry = it.next();
-                    org.apache.bookkeeper.client.LedgerEntry mockEntry =
-                            mock(org.apache.bookkeeper.client.LedgerEntry.class);
-                    when(mockEntry.getLedgerId()).thenReturn(apiEntry.getLedgerId());
-                    when(mockEntry.getEntryId()).thenReturn(apiEntry.getEntryId());
-                    when(mockEntry.getLength()).thenReturn(apiEntry.getLength());
-                    when(mockEntry.getEntryBuffer()).thenReturn(
-                            io.netty.buffer.Unpooled.wrappedBuffer(apiEntry.getEntryBuffer()));
-                    return mockEntry;
-                }
-            };
-            cb.readComplete(BKException.Code.OK, ledgerHandle, enumeration, ctx);
-            return null;
-        }).when(ledgerHandle).asyncBatchReadUnconfirmedEntries(eq(0L), eq(5), anyLong(), any(ReadCallback.class),
-                any());
+                throw new IndexOutOfBoundsException("Entry " + entryId + " not found");
+            }
+
+            @Override
+            public Iterator<LedgerEntry> iterator() {
+                return entryList.iterator();
+            }
+
+            @Override
+            public void close() {
+                entryList.forEach(LedgerEntry::close);
+            }
+        };
+        when(ledgerHandle.batchReadUnconfirmedAsync(eq(0L), eq(5), anyLong()))
+                .thenReturn(CompletableFuture.completedFuture(batchEntries));
 
         CompletableFuture<List<Entry>> future = cache.readFromStorage(ledgerHandle, 0L, 4L, () -> 1);
 

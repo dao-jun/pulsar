@@ -19,6 +19,8 @@
 package org.apache.bookkeeper.mledger;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static org.apache.pulsar.common.protocol.Commands.DEFAULT_MAX_MESSAGE_SIZE;
+
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Arrays;
@@ -101,13 +103,13 @@ public class ManagedLedgerConfig {
     private boolean batchReadEnabled = false;
 
     /**
-     * Max size in bytes for batch read requests. If set to 0 or negative,
+     * Max size in bytes for per-batch read request. If set to 0 or negative,
      * uses the netty max frame size (default 5MB).
      * Batch read may return fewer entries if total size exceeds this limit.
      */
     @Getter
     @Setter
-    private int batchReadMaxSizeBytes = 0;
+    private int batchReadMaxSizeBytes = DEFAULT_MAX_MESSAGE_SIZE;
 
     /**
      * Returns whether batch read is enabled for this managed ledger.
