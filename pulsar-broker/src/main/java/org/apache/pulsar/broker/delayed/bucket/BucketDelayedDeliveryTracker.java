@@ -641,6 +641,7 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
         }
 
         long cutoffTime = getCutoffTime();
+        Long firstLiveLedgerId = firstActiveLedgerId();
 
         lastMutableBucket.moveScheduledMessageToSharedQueue(cutoffTime, sharedBucketPriorityQueue);
 
@@ -649,12 +650,15 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
 
         while (n > 0 && !sharedBucketPriorityQueue.isEmpty()) {
             long timestamp = sharedBucketPriorityQueue.peekN1();
+            long ledgerId = sharedBucketPriorityQueue.peekN2();
+            long entryId = sharedBucketPriorityQueue.peekN3();
+            if (firstLiveLedgerId != null && ledgerId < firstLiveLedgerId && !containsMessage(ledgerId, entryId)) {
+                sharedBucketPriorityQueue.pop();
+                continue;
+            }
             if (timestamp > cutoffTime) {
                 break;
             }
-
-            long ledgerId = sharedBucketPriorityQueue.peekN2();
-            long entryId = sharedBucketPriorityQueue.peekN3();
 
             SnapshotKey snapshotKey = new SnapshotKey(ledgerId, entryId);
 
@@ -773,16 +777,21 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
         // Reuse trimFuture to block new triggers until the clear chain completes.
         CompletableFuture<Void> before = trimFuture != null && !trimFuture.isDone()
                 ? trimFuture : CompletableFuture.completedFuture(null);
-        trimFuture = before.thenCompose(__ -> {
-            synchronized (BucketDelayedDeliveryTracker.this) {
-                CompletableFuture<Void> future = cleanImmutableBuckets();
-                sharedBucketPriorityQueue.clear();
-                lastMutableBucket.clear();
-                snapshotSegmentLastIndexMap.clear();
-                numberDelayedMessages.set(0);
-                return future;
-            }
-        });
+        trimFuture = before
+                .exceptionally(t -> {
+                    log.warn().exception(t).log("Trim/merge buckets failed, but still clear");
+                    return null;
+                })
+                .thenCompose(__ -> {
+                    synchronized (BucketDelayedDeliveryTracker.this) {
+                        CompletableFuture<Void> future = cleanImmutableBuckets();
+                        sharedBucketPriorityQueue.clear();
+                        lastMutableBucket.clear();
+                        snapshotSegmentLastIndexMap.clear();
+                        numberDelayedMessages.set(0);
+                        return future;
+                    }
+                });
         return trimFuture;
     }
 
@@ -847,14 +856,11 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
      * to avoid wasted work when storage is unavailable.
      */
     private synchronized CompletableFuture<Void> asyncTrimImmutableBuckets() {
-        ManagedLedger ledger = context.getCursor().getManagedLedger();
-        if (ledger == null || ledger.getLedgersInfo().isEmpty()) {
-            return CompletableFuture.completedFuture(null);
-        }
-        Long firstLedgerId = ledger.getLedgersInfo().firstKey();
+        Long firstLedgerId = firstActiveLedgerId();
         if (null == firstLedgerId) {
             return CompletableFuture.completedFuture(null);
         }
+        ManagedLedger ledger = context.getCursor().getManagedLedger();
 
         Map<Range<Long>, ImmutableBucket> toBeDeletedBuckets = immutableBuckets.asMapOfRanges().entrySet().stream()
                 .filter(e -> e.getKey().upperEndpoint() < firstLedgerId)
@@ -875,23 +881,28 @@ public class BucketDelayedDeliveryTracker extends AbstractDelayedDeliveryTracker
 
     private CompletableFuture<Void> deleteBucketSnapshot(String ledgerName,
                                                           Range<Long> range, ImmutableBucket bucket) {
-        synchronized (this) {
-            immutableBuckets.remove(range);
-            numberDelayedMessages.addAndGet(-bucket.getNumberBucketDelayedMessages());
-        }
         return bucket.asyncDeleteBucketSnapshot(stats)
                 .handle((__, t) -> {
                     if (t != null) {
                         log.warn().attr("LedgerName", ledgerName)
                                 .attr("BucketKey", bucket.bucketKey())
                                 .log("Failed to delete bucket snapshot");
-                        synchronized (this) {
-                            immutableBuckets.put(range, bucket);
-                            numberDelayedMessages.addAndGet(bucket.getNumberBucketDelayedMessages());
-                        }
                         throw new CompletionException(t);
+                    }
+                    synchronized (this) {
+                        snapshotSegmentLastIndexMap.entrySet().removeIf(entry -> entry.getValue() == bucket);
+                        immutableBuckets.remove(range);
+                        numberDelayedMessages.addAndGet(-bucket.getNumberBucketDelayedMessages());
                     }
                     return null;
                 });
+    }
+
+    private Long firstActiveLedgerId() {
+        ManagedLedger ledger = context.getCursor().getManagedLedger();
+        if (ledger == null || ledger.getLedgersInfo().isEmpty()) {
+            return null;
+        }
+        return ledger.getLedgersInfo().firstKey();
     }
 }
