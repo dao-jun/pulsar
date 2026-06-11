@@ -20,7 +20,6 @@ package org.apache.bookkeeper.mledger;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static org.apache.pulsar.common.protocol.Commands.DEFAULT_MAX_MESSAGE_SIZE;
-
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.util.Arrays;
