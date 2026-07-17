@@ -122,7 +122,6 @@ import org.apache.bookkeeper.mledger.OffloadedLedgerHandle;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionBound;
 import org.apache.bookkeeper.mledger.PositionFactory;
-import org.apache.bookkeeper.mledger.RandomReader;
 import org.apache.bookkeeper.mledger.WaitingEntryCallBack;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
@@ -2350,9 +2349,13 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
 
     }
 
-    @Override
-    public RandomReader newRandomReader() {
-        return randomReaders.create();
+    /**
+     * Returns the registry for creating RandomReader instances bound to this managed ledger's entry cache.
+     * RandomReader support is specific to this implementation and is intentionally not part of the
+     * {@link ManagedLedger} contract.
+     */
+    public RandomReaders randomReaders() {
+        return randomReaders;
     }
 
     private void internalReadFromLedger(ReadHandle ledger, OpReadEntry opReadEntry) {
@@ -2476,15 +2479,11 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
         }
     }
 
-    protected void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry, ReadEntriesCallback callback,
-                                      Object ctx) {
-        asyncReadEntry(ledger, firstEntry, lastEntry, () -> 0, callback, ctx);
-    }
-
     void asyncReadEntryForRandomReader(ReadHandle ledger, long firstEntry, long lastEntry,
-                                       ReadEntriesCallback callback, Object ctx) {
-        // Random-reader misses must be admitted to the shared cache for reuse by later positional reads.
-        asyncReadEntry(ledger, firstEntry, lastEntry, () -> 1, callback, ctx);
+                                       IntSupplier expectedReadCount, ReadEntriesCallback callback) {
+        // expectedReadCount is resolved by the caller: cache-populating readers weight misses (>0),
+        // bypass readers use (0).
+        asyncReadEntry(ledger, firstEntry, lastEntry, expectedReadCount, callback, null);
     }
 
     private void asyncReadEntry(ReadHandle ledger, long firstEntry, long lastEntry,
@@ -5309,12 +5308,17 @@ public class ManagedLedgerImpl implements ManagedLedger, CreateCallback {
     }
 
     boolean shouldCacheAddedEntry() {
-        // Random readers are deliberately not active cursors, but still need add-path cache seeding.
-        return getActiveCursors().shouldCacheAddedEntry() || randomReaders.hasActiveReaders();
+        // Only cache-populating random readers seed the tail; bypass readers do not.
+        return getActiveCursors().shouldCacheAddedEntry() || randomReaders.hasCachePopulatingReaders();
     }
 
     @VisibleForTesting
     int getActiveRandomReaderCount() {
         return randomReaders.size();
+    }
+
+    // Package-private: cache-populating readers contribute to expectedReadCount on the read and add paths.
+    int getActiveCachePopulatingRandomReaderCount() {
+        return randomReaders.cachePopulatingCount();
     }
 }

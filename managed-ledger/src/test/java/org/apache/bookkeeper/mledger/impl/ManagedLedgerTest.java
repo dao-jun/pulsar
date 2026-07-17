@@ -123,6 +123,7 @@ import org.apache.bookkeeper.mledger.AsyncCallbacks.OpenLedgerCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntriesCallback;
 import org.apache.bookkeeper.mledger.AsyncCallbacks.ReadEntryCallback;
 import org.apache.bookkeeper.mledger.Entry;
+import org.apache.bookkeeper.mledger.EntryReadCountHandler;
 import org.apache.bookkeeper.mledger.LedgerOffloader;
 import org.apache.bookkeeper.mledger.ManagedCursor;
 import org.apache.bookkeeper.mledger.ManagedCursor.IndividualDeletedEntries;
@@ -138,7 +139,6 @@ import org.apache.bookkeeper.mledger.ManagedLedgerFactoryMXBean;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionBound;
 import org.apache.bookkeeper.mledger.PositionFactory;
-import org.apache.bookkeeper.mledger.RandomReader;
 import org.apache.bookkeeper.mledger.impl.ManagedCursorImpl.VoidCallback;
 import org.apache.bookkeeper.mledger.impl.MetaStore.MetaStoreCallback;
 import org.apache.bookkeeper.mledger.impl.cache.EntryCache;
@@ -374,9 +374,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReader() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReader",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReader",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(2));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         assertEquals(reader.read(PositionFactory.EARLIEST, 10).get(5, TimeUnit.SECONDS),
                 Collections.emptyList());
@@ -407,8 +407,8 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderRejectsInvalidArguments() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderRejectsInvalidArguments");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderRejectsInvalidArguments");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         assertTrue(expectFutureFailure(reader.read(null, 1)) instanceof IllegalArgumentException);
         assertTrue(expectFutureFailure(reader.read(PositionFactory.EARLIEST, 0))
@@ -421,9 +421,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderPositionBoundaryValidation() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderPositionBoundaryValidation",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderPositionBoundaryValidation",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(2));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -450,8 +450,8 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderDoesNotWaitForFutureWrites() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderDoesNotWaitForFutureWrites");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderDoesNotWaitForFutureWrites");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         CompletableFuture<List<Entry>> readAfterLast = reader.read(p0.getNext(), 10);
@@ -469,9 +469,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderExactCountBoundaries() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderExactCountBoundaries",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderExactCountBoundaries",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(3));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -494,7 +494,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
                 "testRandomReaderSkipsEmptyLedgers",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(10));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         ledger.ledgerClosed(ledger.currentLedger, 0L);
@@ -517,9 +517,10 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderStopsOnErrorAndReturnsPartialEntries() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderStopsOnErrorAndReturnsPartialEntries",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStopsOnErrorAndReturnsPartialEntries",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(1));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -539,8 +540,8 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderFailsWhenClosed() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderFailsWhenClosed");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderFailsWhenClosed");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
         Position position = ledger.addEntry("entry-0".getBytes(Encoding));
 
         ledger.close();
@@ -551,8 +552,8 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderIgnoresCursorAckState() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderIgnoresCursorAckState");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderIgnoresCursorAckState");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
         ManagedCursor cursor = ledger.openCursor("c1");
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
@@ -570,8 +571,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderMaxPositionBeforeStartReturnsEmpty() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderMaxPositionBeforeStartReturnsEmpty");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderMaxPositionBeforeStartReturnsEmpty");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -585,9 +587,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderMaxPositionCapsSameLedger() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderMaxPositionCapsSameLedger",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderMaxPositionCapsSameLedger",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(10));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -604,9 +606,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderMaxPositionInclusive() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderMaxPositionInclusive",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderMaxPositionInclusive",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(10));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -622,9 +624,9 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderMaxPositionCrossesLedger() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderMaxPositionCrossesLedger",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderMaxPositionCrossesLedger",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(2));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -644,9 +646,10 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderMaxPositionRespectsBothConstraints() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderMaxPositionRespectsBothConstraints",
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderMaxPositionRespectsBothConstraints",
                 new ManagedLedgerConfig().setMaxEntriesPerLedger(10));
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
@@ -664,8 +667,8 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
     @Test(timeOut = 20000)
     public void testRandomReaderMaxSizeBytesAndNullMaxPosition() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderMaxSizeBytesAndNullMaxPosition");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderMaxSizeBytesAndNullMaxPosition");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         byte[] data = new byte[100];
         Position p0 = ledger.addEntry(data);
@@ -691,7 +694,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
 
             assertEquals(ledger.getActiveCursors().size(), 0);
             assertFalse(ledger.shouldCacheAddedEntry());
-            RandomReader reader = ledger.newRandomReader();
+            RandomReader reader = ledger.randomReaders().create(true);
             assertEquals(ledger.getActiveRandomReaderCount(), 1);
             assertTrue(ledger.shouldCacheAddedEntry());
 
@@ -718,7 +721,7 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderMissPopulatesReadThroughCache");
         Position position = ledger.addEntry("entry".getBytes(Encoding));
         assertEquals(ledger.getCacheSize(), 0);
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
 
         long missesBefore = factory.getMbean().getCacheMissesTotal();
         assertEntryPositionsAndRelease(reader.read(position, 1).get(5, TimeUnit.SECONDS), position);
@@ -734,8 +737,8 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
     @Test(timeOut = 20000)
     public void testRandomReaderLifecycleTracksManagedLedgerCloseAndFence() throws Exception {
         ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderLifecycleClose");
-        RandomReader first = ledger.newRandomReader();
-        RandomReader second = ledger.newRandomReader();
+        RandomReader first = ledger.randomReaders().create(true);
+        RandomReader second = ledger.randomReaders().create(true);
         assertEquals(ledger.getActiveRandomReaderCount(), 2);
 
         first.close();
@@ -743,27 +746,27 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         assertEquals(ledger.getActiveRandomReaderCount(), 1);
         ledger.close();
         assertEquals(ledger.getActiveRandomReaderCount(), 0);
-        assertTrue(((RandomReaderImpl) second).isClosed());
+        assertTrue(((RandomReader) second).isClosed());
         assertTrue(expectFutureFailure(second.read(PositionFactory.EARLIEST, 1))
                 instanceof ManagedLedgerException.ManagedLedgerAlreadyClosedException);
         try {
-            ledger.newRandomReader();
+            ledger.randomReaders().create(true);
             fail("Expected opening a reader on a closed ledger to fail");
         } catch (IllegalStateException expected) {
             // expected
         }
 
         ManagedLedgerImpl fencedLedger = (ManagedLedgerImpl) factory.open("testRandomReaderLifecycleFence");
-        RandomReader fencedReader = fencedLedger.newRandomReader();
+        RandomReader fencedReader = fencedLedger.randomReaders().create(true);
         fencedLedger.setFenced();
         assertEquals(fencedLedger.getActiveRandomReaderCount(), 0);
-        assertTrue(((RandomReaderImpl) fencedReader).isClosed());
+        assertTrue(((RandomReader) fencedReader).isClosed());
     }
 
     @Test(timeOut = 20000)
     public void testRandomReaderConcurrentReadsAreStateless() throws Exception {
-        ManagedLedger ledger = factory.open("testRandomReaderConcurrentReadsAreStateless");
-        @Cleanup RandomReader reader = ledger.newRandomReader();
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderConcurrentReadsAreStateless");
+        @Cleanup RandomReader reader = ledger.randomReaders().create(true);
         Position p0 = ledger.addEntry("entry-0".getBytes(Encoding));
         Position p1 = ledger.addEntry("entry-1".getBytes(Encoding));
         Position p2 = ledger.addEntry("entry-2".getBytes(Encoding));
@@ -792,9 +795,237 @@ public class ManagedLedgerTest extends MockedBookKeeperTestCase {
         ledger.ledgers.put(emptyLedger.getId(), new LedgerInfo()
                 .setLedgerId(emptyLedger.getId()).setEntries(0).setSize(0));
 
-        CompletableFuture<List<Entry>> promise = OpReadEntries.read(ledger,
+        CompletableFuture<List<Entry>> promise = OpRandomReadEntries.read(ledger,
                 PositionFactory.create(emptyLedger.getId(), 0), 1, PositionFactory.LATEST);
         assertEntryPositionsAndRelease(promise.get(5, TimeUnit.SECONDS), nextPosition);
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingFalseDoesNotSeedCache() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testRandomReaderStreamingFalseDoesNotSeedCache");
+        assertEquals(ledger.getActiveRandomReaderCount(), 0);
+        assertFalse(ledger.shouldCacheAddedEntry());
+        try (RandomReader reader = ledger.randomReaders().create(false)) {
+            assertEquals(ledger.getActiveRandomReaderCount(), 1);
+            assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 0);
+            assertFalse(ledger.shouldCacheAddedEntry());
+            ledger.addEntry("entry-0".getBytes(Encoding));
+            assertEquals(ledger.getCacheSize(), 0);
+        }
+        assertEquals(ledger.getActiveRandomReaderCount(), 0);
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingFalseDoesNotPopulateCacheOnMiss() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStreamingFalseDoesNotPopulateCacheOnMiss");
+        Position position = ledger.addEntry("entry".getBytes(Encoding));
+        assertEquals(ledger.getCacheSize(), 0);
+        try (RandomReader reader = ledger.randomReaders().create(false)) {
+            long missesBefore = factory.getMbean().getCacheMissesTotal();
+            assertEntryDataAndRelease(reader.read(position, 1).get(5, TimeUnit.SECONDS), "entry");
+            assertEquals(factory.getMbean().getCacheMissesTotal(), missesBefore + 1);
+            assertEquals(ledger.getCacheSize(), 0);
+            long missesBefore2 = factory.getMbean().getCacheMissesTotal();
+            assertEntryDataAndRelease(reader.read(position, 1).get(5, TimeUnit.SECONDS), "entry");
+            assertEquals(factory.getMbean().getCacheMissesTotal(), missesBefore2 + 1);
+        }
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingTruePopulatesCacheOnMiss() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStreamingTruePopulatesCacheOnMiss");
+        Position position = ledger.addEntry("entry".getBytes(Encoding));
+        assertEquals(ledger.getCacheSize(), 0);
+        try (RandomReader reader = ledger.randomReaders().create(true)) {
+            long missesBefore = factory.getMbean().getCacheMissesTotal();
+            assertEntryDataAndRelease(reader.read(position, 1).get(5, TimeUnit.SECONDS), "entry");
+            assertEquals(factory.getMbean().getCacheMissesTotal(), missesBefore + 1);
+            assertTrue(ledger.getCacheSize() > 0);
+            long hitsBefore = factory.getMbean().getCacheHitsTotal();
+            assertEntryDataAndRelease(reader.read(position, 1).get(5, TimeUnit.SECONDS), "entry");
+            assertEquals(factory.getMbean().getCacheHitsTotal(), hitsBefore + 1);
+        }
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingModesCoexistForSeeding() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStreamingModesCoexistForSeeding");
+        RandomReader bypass = ledger.randomReaders().create(false);
+        assertFalse(ledger.shouldCacheAddedEntry());
+        RandomReader streaming = ledger.randomReaders().create(true);
+        assertTrue(ledger.shouldCacheAddedEntry());
+        streaming.close();
+        assertFalse(ledger.shouldCacheAddedEntry());
+        bypass.close();
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testCachePopulatingReadersAreCounted() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testCachePopulatingReadersAreCounted");
+        try (RandomReader first = ledger.randomReaders().create(true);
+             RandomReader second = ledger.randomReaders().create(true)) {
+            assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 2);
+        }
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 0);
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingFalseServesExistingCacheHit() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStreamingFalseServesExistingCacheHit");
+        Position position = ledger.addEntry("entry".getBytes(Encoding));
+        try (RandomReader seeder = ledger.randomReaders().create(true)) {
+            assertEntryDataAndRelease(seeder.read(position, 1).get(5, TimeUnit.SECONDS), "entry");
+        }
+        assertTrue(ledger.getCacheSize() > 0);
+        try (RandomReader bypass = ledger.randomReaders().create(false)) {
+            long missesBefore = factory.getMbean().getCacheMissesTotal();
+            assertEntryDataAndRelease(bypass.read(position, 1).get(5, TimeUnit.SECONDS), "entry");
+            assertEquals(factory.getMbean().getCacheMissesTotal(), missesBefore);
+        }
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testStreamingReaderCountAccessorWiring() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testStreamingReaderCountAccessorWiring");
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 0);
+        RandomReader s1 = ledger.randomReaders().create(true);
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 1);
+        RandomReader b1 = ledger.randomReaders().create(false);
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 1);
+        RandomReader s2 = ledger.randomReaders().create(true);
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 2);
+        s1.close();
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 1);
+        s2.close();
+        b1.close();
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 0);
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testFenceZeroesStreamingReaders() throws Exception {
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open("testFenceZeroesStreamingReaders");
+        RandomReader streaming = ledger.randomReaders().create(true);
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 1);
+        ledger.setFenced();
+        assertEquals(ledger.getActiveCachePopulatingRandomReaderCount(), 0);
+        assertTrue(((RandomReader) streaming).isClosed());
+        // Do not close(): a fenced ledger cannot be closed (throws ManagedLedgerFencedException); the factory
+        // tears it down. Mirrors testRandomReaderLifecycleTracksManagedLedgerCloseAndFence.
+    }
+
+    // These tests assert the expectedReadCount value entries carry, not eviction under pressure.
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingSeedsTailWithEvictionWeight() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setCacheEvictionByExpectedReadCount(true);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStreamingSeedsTailWithEvictionWeight", config);
+        try (RandomReader reader = ledger.randomReaders().create(true)) {
+            Position position = ledger.addEntry("entry-0".getBytes(Encoding));
+            List<Entry> entries = reader.read(position, 1).get(5, TimeUnit.SECONDS);
+            try {
+                assertEquals(entries.size(), 1);
+                EntryReadCountHandler handler = entries.get(0).getReadCountHandler();
+                assertNotNull(handler);
+                // write-path seed: cursors(0) + streaming(1) = 1. Assert BEFORE release (shared handler).
+                assertEquals(handler.getExpectedReadCount(), 1);
+            } finally {
+                entries.forEach(Entry::release);
+            }
+        }
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderMultiStreamingFanoutSharedHandler() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setCacheEvictionByExpectedReadCount(true);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderMultiStreamingFanoutSharedHandler", config);
+        try (RandomReader a = ledger.randomReaders().create(true);
+             RandomReader b = ledger.randomReaders().create(true)) {
+            Position position = ledger.addEntry("entry-0".getBytes(Encoding));
+            // Seeded weight is cursors(0)+streaming(2)=2; the shared handler decrements per release (A:2, B:1).
+            Entry entryA = a.read(position, 1).get(5, TimeUnit.SECONDS).get(0);
+            try {
+                assertEquals(entryA.getReadCountHandler().getExpectedReadCount(), 2);
+            } finally {
+                entryA.release(); // shared handler: 2 -> 1
+            }
+            Entry entryB = b.read(position, 1).get(5, TimeUnit.SECONDS).get(0);
+            try {
+                assertEquals(entryB.getReadCountHandler().getExpectedReadCount(), 1);
+            } finally {
+                entryB.release();
+            }
+        }
+        ledger.close();
+    }
+
+    @Test(timeOut = 20000)
+    public void testRandomReaderStreamingFalseWithCursorsContributesNothingToWeight() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setCacheEvictionByExpectedReadCount(true);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderStreamingFalseWithCursorsContributesNothingToWeight", config);
+        ManagedCursor cursor = ledger.openCursor("c1");
+        try (RandomReader streaming = ledger.randomReaders().create(true);
+             RandomReader bypass = ledger.randomReaders().create(false)) {
+            // weight = cursors(1) + streaming(1) = 2; the streaming=false (bypass) reader contributes nothing.
+            // A regression that counted bypass readers would yield 3.
+            Position position = ledger.addEntry("entry-0".getBytes(Encoding));
+            Entry entry = streaming.read(position, 1).get(5, TimeUnit.SECONDS).get(0);
+            EntryReadCountHandler handler = entry.getReadCountHandler();
+            try {
+                assertEquals(handler.getExpectedReadCount(), 2);
+            } finally {
+                entry.release();
+            }
+            assertEquals(handler.getExpectedReadCount(), 1);
+
+            Entry bypassEntry = bypass.read(position, 1).get(5, TimeUnit.SECONDS).get(0);
+            try {
+                assertSame(bypassEntry.getReadCountHandler(), handler);
+            } finally {
+                bypassEntry.release();
+            }
+            assertEquals(handler.getExpectedReadCount(), 1);
+
+            cursor.readEntries(1).forEach(Entry::release);
+            assertEquals(handler.getExpectedReadCount(), 0);
+        }
+        ledger.close();
+    }
+
+    // With cacheEvictionByExpectedReadCount=false the add-path expectedReadCount stays 0, so the handler is null.
+    @Test(timeOut = 20000)
+    public void testRandomReaderEvictionWeightDisabledWhenFlagFalse() throws Exception {
+        ManagedLedgerConfig config = new ManagedLedgerConfig();
+        config.setCacheEvictionByExpectedReadCount(false);
+        ManagedLedgerImpl ledger = (ManagedLedgerImpl) factory.open(
+                "testRandomReaderEvictionWeightDisabledWhenFlagFalse", config);
+        try (RandomReader reader = ledger.randomReaders().create(true)) {
+            Position position = ledger.addEntry("entry-0".getBytes(Encoding));
+            Entry entry = reader.read(position, 1).get(5, TimeUnit.SECONDS).get(0);
+            try {
+                assertNull(entry.getReadCountHandler());
+            } finally {
+                entry.release();
+            }
+        }
         ledger.close();
     }
 

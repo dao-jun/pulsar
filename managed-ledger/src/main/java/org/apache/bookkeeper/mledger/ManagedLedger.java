@@ -765,14 +765,6 @@ public interface ManagedLedger {
     void asyncReadEntry(Position position, AsyncCallbacks.ReadEntryCallback callback, Object ctx);
 
     /**
-     * Create a standalone cursorless reader.
-     * @throws UnsupportedOperationException when the managed-ledger implementation does not support random reads
-     */
-    default RandomReader newRandomReader() {
-        throw new UnsupportedOperationException("RandomReader is not supported by this ManagedLedger implementation");
-    }
-
-    /**
      * Get all the managed ledgers.
      */
     NavigableMap<Long, LedgerInfo> getLedgersInfo();

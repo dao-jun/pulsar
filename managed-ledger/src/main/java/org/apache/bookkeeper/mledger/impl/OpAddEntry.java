@@ -268,15 +268,14 @@ public class OpAddEntry implements AddCallback, CloseCallback, Runnable, Managed
         long ledgerId = ledger != null ? ledger.getId() : ((Position) ctx).getLedgerId();
 
         // Handle caching for tailing reads
-        // Cursorless readers are deliberately not active cursors. Their explicit admission signal keeps add-path
-        // seeding independent from cursor accounting. EntryCache.insert must remain unconditional with respect to the
-        // expected-read count: on a zero-cursor topic this entry intentionally has a null read-count handler.
+        // Streaming readers (like cursors) consume the tail, so they count toward expectedReadCount and eviction
+        // priority. With cacheEvictionByExpectedReadCount disabled the handler is intentionally null.
         if (ml.shouldCacheAddedEntry()) {
             int expectedReadCount = 0;
             // only use expectedReadCount if cache eviction is enabled by expected read count
             if (ml.getConfig().isCacheEvictionByExpectedReadCount()) {
-                // use the number of active cursors as the expected read count
-                expectedReadCount = ml.getActiveCursors().size();
+                // active cursors + cache-populating random readers all read the tail entry
+                expectedReadCount = ml.getActiveCursors().size() + ml.getActiveCachePopulatingRandomReaderCount();
             }
             EntryImpl entry = EntryImpl.create(ledgerId, entryId, data, expectedReadCount);
             entry.setDecreaseReadCountOnRelease(false);

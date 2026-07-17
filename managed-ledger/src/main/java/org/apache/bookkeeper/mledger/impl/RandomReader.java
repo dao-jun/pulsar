@@ -28,27 +28,26 @@ import org.apache.bookkeeper.mledger.Entry;
 import org.apache.bookkeeper.mledger.ManagedLedgerException.ManagedLedgerAlreadyClosedException;
 import org.apache.bookkeeper.mledger.Position;
 import org.apache.bookkeeper.mledger.PositionFactory;
-import org.apache.bookkeeper.mledger.RandomReader;
 import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.bookkeeper.mledger.util.ManagedLedgerUtils;
 
-final class RandomReaderImpl implements RandomReader {
+public final class RandomReader implements AutoCloseable {
     private final ManagedLedgerImpl ledger;
     private final RandomReaders owner;
+    private final boolean populateCache;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    RandomReaderImpl(ManagedLedgerImpl ledger, RandomReaders owner) {
+    RandomReader(ManagedLedgerImpl ledger, RandomReaders owner, boolean populateCache) {
         this.ledger = ledger;
         this.owner = owner;
+        this.populateCache = populateCache;
     }
 
-    @Override
     public CompletableFuture<List<Entry>> read(Position startPosition, int numberOfEntries) {
         return read(startPosition, numberOfEntries, PositionFactory.LATEST,
                 ManagedLedgerUtils.NO_MAX_SIZE_LIMIT);
     }
 
-    @Override
     public CompletableFuture<List<Entry>> read(Position startPosition, int numberOfEntries, Position maxPosition,
                                                long maxSizeBytes) {
         if (closed.get() || owner.isClosed()) {
@@ -71,7 +70,16 @@ final class RandomReaderImpl implements RandomReader {
                     estimateEntryCountByBytesSize(numberOfEntries, maxSizeBytes, normalizedStartPosition, ledger));
         }
 
-        return OpReadEntries.read(ledger, normalizedStartPosition, effectiveCount, normalizedMaxPosition);
+        return OpRandomReadEntries.read(
+                ledger, normalizedStartPosition, effectiveCount, normalizedMaxPosition, populateCache);
+    }
+
+    public CompletableFuture<List<Entry>> read(Position startPosition, int numberOfEntries, Position maxPosition) {
+        return read(startPosition, numberOfEntries, maxPosition, ManagedLedgerUtils.NO_MAX_SIZE_LIMIT);
+    }
+
+    public CompletableFuture<List<Entry>> read(Position startPosition, int numberOfEntries, long maxSizeBytes) {
+        return read(startPosition, numberOfEntries, PositionFactory.LATEST, maxSizeBytes);
     }
 
     private Position normalizeStartPosition(Position startPosition) {
@@ -95,7 +103,7 @@ final class RandomReaderImpl implements RandomReader {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
-            owner.unregister();
+            owner.unregister(populateCache);
         }
     }
 

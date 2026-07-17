@@ -18,37 +18,48 @@
  */
 package org.apache.bookkeeper.mledger.impl;
 
-final class RandomReaders {
+import java.util.concurrent.atomic.AtomicInteger;
+
+public final class RandomReaders {
     private final ManagedLedgerImpl ledger;
-    // Lifecycle mutations are synchronized; volatile reads keep add and read paths lock-free.
-    private volatile int activeReaders;
+    private final AtomicInteger activeReaders = new AtomicInteger();
+    private final AtomicInteger cachePopulatingReaders = new AtomicInteger();
     private volatile boolean closed;
 
     RandomReaders(ManagedLedgerImpl ledger) {
         this.ledger = ledger;
     }
 
-    synchronized RandomReaderImpl create() {
+    public synchronized RandomReader create(boolean populateCache) {
         if (closed) {
             throw new IllegalStateException("Managed ledger is already closed");
         }
-        RandomReaderImpl reader = new RandomReaderImpl(ledger, this);
-        activeReaders++;
+        RandomReader reader = new RandomReader(ledger, this, populateCache);
+        activeReaders.incrementAndGet();
+        if (populateCache) {
+            cachePopulatingReaders.incrementAndGet();
+        }
         return reader;
     }
 
-    synchronized void unregister() {
-        if (activeReaders > 0) {
-            activeReaders--;
+    synchronized void unregister(boolean populateCache) {
+        // Guard against negative: closeAll() may have zeroed counters before a late unregister.
+        activeReaders.updateAndGet(current -> Math.max(0, current - 1));
+        if (populateCache) {
+            cachePopulatingReaders.updateAndGet(current -> Math.max(0, current - 1));
         }
     }
 
-    boolean hasActiveReaders() {
-        return activeReaders > 0;
+    boolean hasCachePopulatingReaders() {
+        return cachePopulatingReaders.get() > 0;
+    }
+
+    int cachePopulatingCount() {
+        return cachePopulatingReaders.get();
     }
 
     int size() {
-        return activeReaders;
+        return activeReaders.get();
     }
 
     boolean isClosed() {
@@ -57,6 +68,7 @@ final class RandomReaders {
 
     synchronized void closeAll() {
         closed = true;
-        activeReaders = 0;
+        activeReaders.set(0);
+        cachePopulatingReaders.set(0);
     }
 }

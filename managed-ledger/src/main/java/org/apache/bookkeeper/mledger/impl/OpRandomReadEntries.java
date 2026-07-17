@@ -37,7 +37,7 @@ import org.apache.bookkeeper.mledger.proto.ManagedLedgerInfo.LedgerInfo;
 import org.apache.pulsar.common.util.FutureUtil;
 
 @CustomLog
-class OpReadEntries implements ReadEntriesCallback {
+class OpRandomReadEntries implements ReadEntriesCallback {
     private final ManagedLedgerImpl ledger;
     private final Position maxPosition;
     private final int count;
@@ -46,18 +46,26 @@ class OpReadEntries implements ReadEntriesCallback {
     private final AtomicBoolean terminal = new AtomicBoolean();
     private Position readPosition;
     private Position nextReadPosition;
+    private final boolean populateCache;
 
-    private OpReadEntries(ManagedLedgerImpl ledger, Position readPosition, int count, Position maxPosition) {
+    private OpRandomReadEntries(ManagedLedgerImpl ledger, Position readPosition, int count, Position maxPosition,
+                                boolean populateCache) {
         this.ledger = ledger;
         this.readPosition = ledger.startReadOperationOnLedger(readPosition);
         this.count = count;
         this.maxPosition = maxPosition;
         this.nextReadPosition = this.readPosition;
+        this.populateCache = populateCache;
     }
 
     static CompletableFuture<List<Entry>> read(ManagedLedgerImpl ledger, Position readPosition, int count,
                                                Position maxPosition) {
-        OpReadEntries op = new OpReadEntries(ledger, readPosition, count, maxPosition);
+        return read(ledger, readPosition, count, maxPosition, true);
+    }
+
+    static CompletableFuture<List<Entry>> read(ManagedLedgerImpl ledger, Position readPosition, int count,
+                                               Position maxPosition, boolean populateCache) {
+        OpRandomReadEntries op = new OpRandomReadEntries(ledger, readPosition, count, maxPosition, populateCache);
         op.readEntries();
         return op.promise;
     }
@@ -146,7 +154,13 @@ class OpReadEntries implements ReadEntriesCallback {
                 .attr("firstEntry", firstEntry)
                 .attr("lastEntry", lastEntry)
                 .log("Reading entries from ledger");
-        ledger.asyncReadEntryForRandomReader(readHandle, firstEntry, lastEntry, this, null);
+        if (populateCache) {
+            ledger.asyncReadEntryForRandomReader(readHandle, firstEntry, lastEntry,
+                    ledger::getActiveCachePopulatingRandomReaderCount, this);
+        } else {
+            // Cache-bypass: do not write back misses (expectedReadCount = 0).
+            ledger.asyncReadEntryForRandomReader(readHandle, firstEntry, lastEntry, () -> 0, this);
+        }
     }
 
     private Position getNextLedgerPosition(long ledgerId) {
@@ -156,6 +170,9 @@ class OpReadEntries implements ReadEntriesCallback {
 
     @Override
     public void readEntriesComplete(List<Entry> returnedEntries, Object ctx) {
+        if (!populateCache) {
+            returnedEntries.forEach(entry -> ((EntryImpl) entry).setDecreaseReadCountOnRelease(false));
+        }
         if (terminal.get()) {
             returnedEntries.forEach(Entry::release);
             return;
