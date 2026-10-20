@@ -489,12 +489,6 @@
       <artifactId>pulsar-package-filesystem-storage</artifactId>
       <version>${project.version}</version>
     </dependency>
-
-    <dependency>
-      <groupId>io.opentelemetry</groupId>
-      <artifactId>opentelemetry-sdk-testing</artifactId>
-      <scope>test</scope>
-    </dependency>
   </dependencies>
 
   <build>
