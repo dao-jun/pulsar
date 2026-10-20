@@ -184,6 +184,11 @@ jobs:
           distribution: ${{ env.JDK_DISTRIBUTION }}
           java-version: ${{ env.CI_JDK_MAJOR_VERSION }}
 
+      - name: Use Maven 3.9.6 (ci-probe, 2024-era toolchain)
+        run: |
+          curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | tar xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-3.9.6/bin" >> "$GITHUB_PATH"
+
       - name: Check source code license headers
         run: mvn -B -T 8 -ntp initialize apache-rat:check license:check
 
@@ -302,6 +307,11 @@ jobs:
         with:
           distribution: ${{ env.JDK_DISTRIBUTION }}
           java-version: ${{ matrix.jdk || env.CI_JDK_MAJOR_VERSION }}
+
+      - name: Use Maven 3.9.6 (ci-probe, 2024-era toolchain)
+        run: |
+          curl -fsSL https://archive.apache.org/dist/maven/maven-3/3.9.6/binaries/apache-maven-3.9.6-bin.tar.gz | tar xz -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/apache-maven-3.9.6/bin" >> "$GITHUB_PATH"
 
       - name: Install gh-actions-artifact-client.js
         uses: apache/pulsar-test-infra/gh-actions-artifact-client/dist@master
